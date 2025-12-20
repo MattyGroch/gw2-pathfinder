@@ -1,0 +1,21 @@
+# Development Dockerfile for backend
+FROM node:20-alpine
+
+WORKDIR /app
+
+# Copy package files first for better caching
+COPY package*.json ./
+COPY tsconfig.json ./
+
+# Install all dependencies (including dev dependencies like tsx)
+RUN npm install
+
+# Copy source code (will be overridden by volume mount in dev mode)
+COPY src ./src
+
+# Expose port
+EXPOSE 3001
+
+# Start with hot-reload
+CMD ["npm", "run", "dev"]
+

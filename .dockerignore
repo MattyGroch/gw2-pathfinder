@@ -1,0 +1,42 @@
+# Dependencies
+node_modules
+npm-debug.log
+yarn-error.log
+
+# Build outputs
+dist
+dist-ssr
+build
+
+# Environment files
+.env
+.env.local
+.env.production
+.env.*.local
+
+# Git
+.git
+.gitignore
+
+# IDE
+.vscode
+.idea
+*.swp
+*.swo
+*~
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Server directory (frontend Dockerfile doesn't need it)
+server
+
+# Documentation (optional, can include if needed)
+# README.md
+# LICENSE
+
+# Logs
+logs
+*.log
+

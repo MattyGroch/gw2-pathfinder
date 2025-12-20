@@ -1,0 +1,47 @@
+# Development override for docker-compose.yml
+# Usage: docker-compose -f docker-compose.yml -f docker-compose.dev.yml up
+
+services:
+  backend:
+    build:
+      context: ./server
+      dockerfile: Dockerfile.dev
+    volumes:
+      # Mount source for hot-reload (not read-only so tsx can work)
+      - ./server/src:/app/src
+      - ./server/tsconfig.json:/app/tsconfig.json
+      # Mount node_modules as volume to persist installed packages
+      - backend_node_modules:/app/node_modules
+    environment:
+      NODE_ENV: development
+      DATABASE_URL: postgresql://${POSTGRES_USER:-gw2user}:${POSTGRES_PASSWORD:-gw2pass}@postgres:5432/${POSTGRES_DB:-gw2_pathfinder}
+    command: npm run dev
+
+  frontend:
+    build:
+      context: .
+      dockerfile: Dockerfile.dev
+    volumes:
+      # Mount source for hot-reload
+      - ./src:/app/src
+      - ./index.html:/app/index.html
+      - ./vite.config.ts:/app/vite.config.ts
+      - ./package.json:/app/package.json
+      - ./tailwind.config.js:/app/tailwind.config.js
+      - ./postcss.config.js:/app/postcss.config.js
+      - ./tsconfig.json:/app/tsconfig.json
+      - ./tsconfig.app.json:/app/tsconfig.app.json
+      - ./tsconfig.node.json:/app/tsconfig.node.json
+      # Mount node_modules as volume to persist installed packages
+      - frontend_node_modules:/app/node_modules
+    environment:
+      VITE_API_BASE: http://localhost:3001/api
+    ports:
+      - "5173:5173"  # Use port 5173 for dev mode (not 80)
+    # Override production settings
+    restart: "no"  # Don't auto-restart in dev mode
+
+volumes:
+  backend_node_modules:
+  frontend_node_modules:
+

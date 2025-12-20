@@ -1,0 +1,80 @@
+services:
+  # PostgreSQL Database
+  postgres:
+    image: postgres:16-alpine
+    container_name: gw2-pathfinder-db
+    environment:
+      POSTGRES_USER: ${POSTGRES_USER:-gw2user}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-gw2pass}
+      POSTGRES_DB: ${POSTGRES_DB:-gw2_pathfinder}
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER:-gw2user}"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+    networks:
+      - gw2-network
+    restart: unless-stopped
+
+  # Backend API Server
+  backend:
+    build:
+      context: ./server
+      dockerfile: Dockerfile
+    container_name: gw2-pathfinder-backend
+    environment:
+      DATABASE_URL: postgresql://${POSTGRES_USER:-gw2user}:${POSTGRES_PASSWORD:-gw2pass}@postgres:5432/${POSTGRES_DB:-gw2_pathfinder}
+      PORT: 3001
+      NODE_ENV: production
+    depends_on:
+      postgres:
+        condition: service_healthy
+    volumes:
+      - ./server/src/db/schema.sql:/app/src/db/schema.sql:ro
+    networks:
+      - gw2-network
+      - traefik
+    restart: unless-stopped
+    labels:
+      - "traefik.enable=true"
+      - "traefik.http.routers.gw2-backend.rule=Host(`gw2pathfinder.com`) && PathPrefix(`/api`)"
+      - "traefik.http.routers.gw2-backend.entrypoints=websecure"
+      - "traefik.http.routers.gw2-backend.tls.certresolver=leresolver"
+      - "traefik.http.routers.gw2-backend.middlewares=gw2-backend-stripprefix"
+      - "traefik.http.middlewares.gw2-backend-stripprefix.stripprefix.prefixes=/api"
+      - "traefik.http.services.gw2-backend.loadbalancer.server.port=3001"
+
+  # Frontend Web Server
+  frontend:
+    build:
+      context: .
+      dockerfile: Dockerfile
+      args:
+        VITE_API_BASE: ${VITE_API_BASE:-/api}
+    container_name: gw2-pathfinder-frontend
+    depends_on:
+      - backend
+    networks:
+      - gw2-network
+      - traefik
+    restart: unless-stopped
+    labels:
+      - "traefik.enable=true"
+      - "traefik.http.routers.gw2-frontend.rule=Host(`gw2pathfinder.com`)"
+      - "traefik.http.routers.gw2-frontend.entrypoints=websecure"
+      - "traefik.http.routers.gw2-frontend.tls.certresolver=leresolver"
+      - "traefik.http.services.gw2-frontend.loadbalancer.server.port=80"
+      # Add your custom tags here
+      - "traefik.tags=public,frontend"
+
+volumes:
+  postgres_data:
+    driver: local
+
+networks:
+  gw2-network:
+    driver: bridge
+  traefik:
+    external: true
