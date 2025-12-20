@@ -35,16 +35,18 @@ services:
       - ./server/src/db/schema.sql:/app/src/db/schema.sql:ro
     networks:
       - gw2-network
-      - traefik
+      - proxy
     restart: unless-stopped
     labels:
       - "traefik.enable=true"
-      - "traefik.http.routers.gw2-backend.rule=Host(`gw2pathfinder.com`) && PathPrefix(`/api`)"
-      - "traefik.http.routers.gw2-backend.entrypoints=websecure"
-      - "traefik.http.routers.gw2-backend.tls.certresolver=leresolver"
+      - "traefik.docker.network=proxy"
+      - "traefik.http.routers.gw2-backend.entrypoints=https"
+      - "traefik.http.routers.gw2-backend.tls.certresolver=http"
+      - "traefik.http.routers.gw2-backend.rule=(Host(`gw2pathfinder.com`) || Host(`www.gw2pathfinder.com`)) && PathPrefix(`/api`)"
       - "traefik.http.routers.gw2-backend.middlewares=gw2-backend-stripprefix"
       - "traefik.http.middlewares.gw2-backend-stripprefix.stripprefix.prefixes=/api"
       - "traefik.http.services.gw2-backend.loadbalancer.server.port=3001"
+      - "traefik.tags=public,backend"
 
   # Frontend Web Server
   frontend:
@@ -58,15 +60,20 @@ services:
       - backend
     networks:
       - gw2-network
-      - traefik
+      - proxy
     restart: unless-stopped
     labels:
       - "traefik.enable=true"
-      - "traefik.http.routers.gw2-frontend.rule=Host(`gw2pathfinder.com`)"
-      - "traefik.http.routers.gw2-frontend.entrypoints=websecure"
-      - "traefik.http.routers.gw2-frontend.tls.certresolver=leresolver"
-      - "traefik.http.services.gw2-frontend.loadbalancer.server.port=80"
-      # Add your custom tags here
+      - "traefik.docker.network=proxy"
+      - "traefik.http.routers.gw2-frontend-secure.entrypoints=https"
+      - "traefik.http.routers.gw2-frontend-secure.tls=true"
+      - "traefik.http.routers.gw2-frontend-secure.tls.certresolver=http"
+      - "traefik.http.routers.gw2-frontend-secure.rule=Host(`gw2pathfinder.com`) || Host(`www.gw2pathfinder.com`)"
+      - "traefik.http.services.gw2-frontend-secure.loadbalancer.server.port=80"
+      - "traefik.http.routers.gw2-frontend.entrypoints=http"
+      - "traefik.http.routers.gw2-frontend.rule=Host(`gw2pathfinder.com`) || Host(`www.gw2pathfinder.com`)"
+      - "traefik.http.routers.gw2-frontend.middlewares=gw2-https-redirect"
+      - "traefik.http.middlewares.gw2-https-redirect.redirectscheme.scheme=https"
       - "traefik.tags=public,frontend"
 
 volumes:
@@ -76,5 +83,5 @@ volumes:
 networks:
   gw2-network:
     driver: bridge
-  traefik:
+  proxy:
     external: true
