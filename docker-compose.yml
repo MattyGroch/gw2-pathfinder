@@ -43,8 +43,6 @@ services:
       - "traefik.http.routers.gw2-backend.entrypoints=https"
       - "traefik.http.routers.gw2-backend.tls.certresolver=http"
       - "traefik.http.routers.gw2-backend.rule=(Host(`gw2pathfinder.com`) || Host(`www.gw2pathfinder.com`)) && PathPrefix(`/api`)"
-      - "traefik.http.routers.gw2-backend.middlewares=gw2-backend-stripprefix"
-      - "traefik.http.middlewares.gw2-backend-stripprefix.stripprefix.prefixes=/api"
       - "traefik.http.services.gw2-backend.loadbalancer.server.port=3001"
       - "traefik.tags=public,backend"
 
