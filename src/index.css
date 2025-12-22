@@ -1,3 +1,26 @@
 @tailwind base;
 @tailwind components;
 @tailwind utilities;
+
+@keyframes fade-blink {
+  0%, 100% {
+    opacity: 1;
+    background-color: rgb(30 41 59); /* slate-800 */
+  }
+  25% {
+    opacity: 1;
+    background-color: rgb(51 65 85); /* slate-600 - lighter slate */
+  }
+  50% {
+    opacity: 1;
+    background-color: rgb(30 41 59); /* slate-800 */
+  }
+  75% {
+    opacity: 1;
+    background-color: rgb(51 65 85); /* slate-600 - lighter slate */
+  }
+}
+
+.achievement-highlight {
+  animation: fade-blink 1.2s ease-in-out;
+}

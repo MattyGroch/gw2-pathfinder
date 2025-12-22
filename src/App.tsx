@@ -1,4 +1,5 @@
-import { useState, useEffect, useMemo, useCallback } from 'react';
+import { useState, useEffect, useMemo, useCallback, useRef } from 'react';
+import { createPortal } from 'react-dom';
 import { 
   Compass, 
   Trophy, 
@@ -25,7 +26,8 @@ import {
   Shirt,
   Gem,
   Calendar,
-  X
+  X,
+  Search
 } from 'lucide-react';
 
 // --- Types ---
@@ -241,7 +243,333 @@ const renderColoredText = (text: string) => {
   return <>{parts}</>;
 };
 
+// Parse and render text with Guild Wars 2 style tags (e.g., <c=@Flavor>text</c>)
+const renderStyledText = (text: string) => {
+  if (!text) return text;
+  
+  // Pattern to match <c=@StyleName>text</c>
+  const styleTagPattern = /<c=@(\w+)>(.*?)<\/c>/g;
+  const parts: (string | React.ReactElement)[] = [];
+  let lastIndex = 0;
+  let match;
+  let keyCounter = 0;
+  
+  while ((match = styleTagPattern.exec(text)) !== null) {
+    // Add text before the style tag
+    if (match.index > lastIndex) {
+      parts.push(text.substring(lastIndex, match.index));
+    }
+    
+    // Apply styling based on style name
+    const styleName = match[1];
+    const styledText = match[2];
+    
+    if (styleName === 'Flavor') {
+      // Add line break before Flavor tag (unless it's at the start)
+      if (match.index > 0) {
+        parts.push(<br key={`br-${keyCounter++}`} />);
+      }
+      parts.push(
+        <span key={`style-${keyCounter++}`} className="italic">
+          {styledText}
+        </span>
+      );
+    } else {
+      // For unknown styles, just render the text without the tag
+      parts.push(styledText);
+    }
+    
+    lastIndex = styleTagPattern.lastIndex;
+  }
+  
+  // Add remaining text after the last style tag
+  if (lastIndex < text.length) {
+    parts.push(text.substring(lastIndex));
+  }
+  
+  // If no style tags were found, return the original text
+  if (parts.length === 0) {
+    return text;
+  }
+  
+  // Return a fragment containing all parts
+  return <>{parts}</>;
+};
+
 // --- Components ---
+
+// Item Tooltip Component
+const ItemTooltip = ({ item, count, children }: { item?: Item; count?: number; children: React.ReactNode }) => {
+  const [showTooltip, setShowTooltip] = useState(false);
+  const [tooltipPosition, setTooltipPosition] = useState({ x: 0, y: 0, transformY: '' });
+  const tooltipRef = useRef<HTMLDivElement>(null);
+  const triggerRef = useRef<HTMLDivElement>(null);
+
+  const calculateTooltipPosition = (rect: DOMRect, tooltipHeight: number = 300) => {
+    const spacing = 8;
+    
+    // Try positioning below first
+    const positionBelow = rect.bottom + spacing;
+    const spaceBelow = window.innerHeight - rect.bottom;
+    
+    // If not enough space below, position above
+    const positionAbove = rect.top - tooltipHeight - spacing;
+    const spaceAbove = rect.top;
+    
+    let y: number;
+    let transformY = '';
+    
+    if (spaceBelow >= tooltipHeight + spacing) {
+      // Enough space below - position below
+      y = positionBelow;
+      transformY = '';
+    } else if (spaceAbove >= tooltipHeight + spacing) {
+      // Enough space above - position above
+      y = rect.top;
+      transformY = 'translateY(-100%)';
+    } else {
+      // Not enough space either way - position where there's more space
+      if (spaceBelow > spaceAbove) {
+        y = window.innerHeight - tooltipHeight - spacing;
+        transformY = '';
+      } else {
+        y = spacing;
+        transformY = '';
+      }
+    }
+    
+    // Also check horizontal bounds
+    let x = rect.left + rect.width / 2;
+    const tooltipWidth = 400; // max-w-[400px]
+    const halfWidth = tooltipWidth / 2;
+    
+    if (x - halfWidth < 0) {
+      x = halfWidth + spacing;
+    } else if (x + halfWidth > window.innerWidth) {
+      x = window.innerWidth - halfWidth - spacing;
+    }
+    
+    return {
+      x,
+      y,
+      transformY
+    };
+  };
+
+  // Update position when tooltip is shown and we can measure it
+  useEffect(() => {
+    if (showTooltip && tooltipRef.current && triggerRef.current) {
+      const tooltipHeight = tooltipRef.current.offsetHeight;
+      const rect = triggerRef.current.getBoundingClientRect();
+      const position = calculateTooltipPosition(rect, tooltipHeight);
+      setTooltipPosition(position);
+    }
+  }, [showTooltip]);
+
+  const handleMouseEnter = (e: React.MouseEvent) => {
+    if (!item) return;
+    setShowTooltip(true);
+    // Initial position calculation (will be refined after tooltip renders)
+    const rect = e.currentTarget.getBoundingClientRect();
+    const position = calculateTooltipPosition(rect);
+    setTooltipPosition(position);
+  };
+
+  const handleMouseLeave = () => {
+    setShowTooltip(false);
+  };
+
+  const handleMouseMove = (e: React.MouseEvent) => {
+    if (!item || !showTooltip) return;
+    const rect = e.currentTarget.getBoundingClientRect();
+    const tooltipHeight = tooltipRef.current?.offsetHeight || 300;
+    const position = calculateTooltipPosition(rect, tooltipHeight);
+    setTooltipPosition(position);
+  };
+
+  // Get rarity color
+  const getRarityColor = (rarity?: string): string => {
+    switch (rarity) {
+      case 'Legendary': return 'text-orange-400';
+      case 'Ascended': return 'text-fuchsia-400';
+      case 'Exotic': return 'text-yellow-400';
+      case 'Rare': return 'text-blue-400';
+      case 'Masterwork': return 'text-green-400';
+      case 'Fine': return 'text-blue-300';
+      case 'Basic': return 'text-slate-300';
+      default: return 'text-slate-300';
+    }
+  };
+
+  // Format vendor value (copper to gold/silver/copper)
+  const formatVendorValue = (copper?: number): string => {
+    if (!copper) return '';
+    const gold = Math.floor(copper / 10000);
+    const silver = Math.floor((copper % 10000) / 100);
+    const copperRem = copper % 100;
+    const parts: string[] = [];
+    if (gold > 0) parts.push(`${gold} gold`);
+    if (silver > 0) parts.push(`${silver} silver`);
+    if (copperRem > 0) parts.push(`${copperRem} copper`);
+    return parts.join(' ') || '0 copper';
+  };
+
+  // Get gear attributes from details
+  const getGearAttributes = (): Array<{ attribute: string; value: number }> => {
+    if (!item?.details) return [];
+    const result: Array<{ attribute: string; value: number }> = [];
+    
+    // Common GW2 attributes
+    const attributeMap: Record<string, string> = {
+      'Power': 'Power',
+      'Precision': 'Precision',
+      'Toughness': 'Toughness',
+      'Vitality': 'Vitality',
+      'ConditionDamage': 'Condition Damage',
+      'ConditionDuration': 'Condition Duration',
+      'HealingPower': 'Healing Power',
+      'BoonDuration': 'Boon Duration',
+      'CritDamage': 'Critical Damage',
+      'CritChance': 'Critical Chance',
+      'MagicFind': 'Magic Find',
+      'AgonyResistance': 'Agony Resistance',
+      'Ferocity': 'Ferocity',
+      'Concentration': 'Concentration',
+      'Expertise': 'Expertise'
+    };
+
+    // Helper to process attributes array
+    const processAttributes = (attributes: any) => {
+      if (Array.isArray(attributes)) {
+        attributes.forEach((attr: any) => {
+          if (attr.attribute && typeof attr.modifier === 'number') {
+            const attrName = attributeMap[attr.attribute] || attr.attribute;
+            result.push({ attribute: attrName, value: attr.modifier });
+          }
+        });
+      } else if (typeof attributes === 'object' && attributes !== null) {
+        Object.entries(attributes).forEach(([key, value]) => {
+          if (typeof value === 'number') {
+            const attrName = attributeMap[key] || key;
+            result.push({ attribute: attrName, value });
+          }
+        });
+      }
+    };
+
+    // Check infix_upgrade.attributes first (primary source for gear stats)
+    if (item.details.infix_upgrade?.attributes) {
+      processAttributes(item.details.infix_upgrade.attributes);
+    }
+    
+    // Also check direct attributes (fallback)
+    if (item.details.attributes) {
+      processAttributes(item.details.attributes);
+    }
+
+    return result;
+  };
+
+  if (!item) {
+    return <>{children}</>;
+  }
+
+  const gearAttributes = getGearAttributes();
+  const isGear = item.type && ['Armor', 'Weapon', 'Trinket', 'Back', 'Accessory', 'Amulet', 'Ring'].includes(item.type);
+
+  return (
+    <>
+      <div
+        ref={triggerRef}
+        onMouseEnter={handleMouseEnter}
+        onMouseLeave={handleMouseLeave}
+        onMouseMove={handleMouseMove}
+        className="relative"
+      >
+        {children}
+      </div>
+      {showTooltip && createPortal(
+        <div
+          ref={tooltipRef}
+          className="fixed z-[99999] pointer-events-none"
+          style={{
+            left: `${tooltipPosition.x}px`,
+            top: `${tooltipPosition.y}px`,
+            transform: `translateX(-50%) ${tooltipPosition.transformY}`
+          }}
+        >
+          <div className="bg-slate-900 border-2 border-slate-600 rounded-lg shadow-2xl min-w-[280px] max-w-[400px] p-3">
+            {/* Item Header */}
+            <div className="flex items-start gap-3 mb-3">
+              {item.icon && (
+                <img 
+                  src={item.icon} 
+                  alt={item.name} 
+                  className="w-16 h-16 object-cover flex-shrink-0"
+                />
+              )}
+              <div className="flex-1 min-w-0">
+                <div className={`font-bold text-base ${getRarityColor(item.rarity)}`}>
+                  {item.name}
+                  {count && count > 1 && <span className="text-slate-300 ml-1">x{count}</span>}
+                </div>
+                {/* Gear Attributes - directly under name */}
+                {isGear && gearAttributes.length > 0 && (
+                  <div className="mt-1 space-y-0.5">
+                    {gearAttributes.map((attr, idx) => (
+                      <div key={idx} className="text-sm text-left">
+                        <span className="text-green-400 font-semibold">
+                          {attr.value > 0 ? '+' : ''}{attr.value}
+                          {/* Note: CritDamage is a flat value, not a percentage */}
+                          {attr.attribute.includes('%') || attr.attribute === 'Magic Find' || attr.attribute === 'Critical Chance' ? '%' : ''}
+                        </span>
+                        <span className="text-green-400 ml-1">{attr.attribute}</span>
+                      </div>
+                    ))}
+                  </div>
+                )}
+                {item.description && (
+                  <div className="text-xs text-slate-400 mt-1 line-clamp-2">
+                    {renderStyledText(item.description)}
+                  </div>
+                )}
+              </div>
+            </div>
+
+            {/* Item Details */}
+            <div className="pt-3 border-t border-slate-700 space-y-1 text-xs">
+              {item.rarity && (
+                <div className="flex justify-between">
+                  <span className="text-slate-400">Rarity:</span>
+                  <span className={getRarityColor(item.rarity)}>{item.rarity}</span>
+                </div>
+              )}
+              {item.type && (
+                <div className="flex justify-between">
+                  <span className="text-slate-400">Type:</span>
+                  <span className="text-slate-300">{item.type}</span>
+                </div>
+              )}
+              {item.level !== undefined && item.level !== null && (
+                <div className="flex justify-between">
+                  <span className="text-slate-400">Required Level:</span>
+                  <span className="text-slate-300">{item.level}</span>
+                </div>
+              )}
+              {item.vendor_value !== undefined && item.vendor_value > 0 && (
+                <div className="flex justify-between">
+                  <span className="text-slate-400">Vendor Value:</span>
+                  <span className="text-slate-300">{formatVendorValue(item.vendor_value)}</span>
+                </div>
+              )}
+            </div>
+          </div>
+        </div>,
+        document.body
+      )}
+    </>
+  );
+};
 
 const Sidebar = ({ 
   groups, 
@@ -457,7 +785,14 @@ const AchievementCard = ({
   accountAccess,
   isAchievementLocked,
   onNavigateToAchievement,
-  achievementToCategoryMap
+  achievementToCategoryMap,
+  starredAchievements,
+  categories,
+  unlocksMap,
+  showBreadcrumbs,
+  groups,
+  advancedView,
+  highlightedAchievementId
 }: { 
   achievement: Achievement; 
   progress?: UserProgress;
@@ -473,6 +808,13 @@ const AchievementCard = ({
   isAchievementLocked?: (achievement: Achievement) => boolean;
   onNavigateToAchievement?: (achievementId: number) => void;
   achievementToCategoryMap?: Record<number, number>;
+  starredAchievements?: Set<number>;
+  categories?: Record<string, AchievementCategory[]>;
+  unlocksMap?: Record<number, number[]>;
+  showBreadcrumbs?: boolean;
+  groups?: AchievementGroup[];
+  advancedView?: boolean;
+  highlightedAchievementId?: number | null;
 }) => {
   const [iconError, setIconError] = useState(false);
   const [showPrerequisites, setShowPrerequisites] = useState(false);
@@ -487,26 +829,87 @@ const AchievementCard = ({
   const max = progress?.max || achievement.tiers[achievement.tiers.length - 1]?.count || 1;
   const percent = Math.min(100, Math.max(0, (current / max) * 100));
   
+  // Get category icon as fallback
+  const getCategoryIcon = (): string | null => {
+    if (!achievementToCategoryMap || !categories) return null;
+    const categoryId = achievementToCategoryMap[achievement.id];
+    if (!categoryId) return null;
+    
+    // Search through all groups to find the category
+    for (const groupId in categories) {
+      const categoryList = categories[groupId];
+      const category = categoryList.find(cat => cat.id === categoryId);
+      if (category && category.icon) {
+        return category.icon;
+      }
+    }
+    return null;
+  };
+  
+  const categoryIcon = getCategoryIcon();
+  const displayIcon = achievement.icon || categoryIcon;
+  
   // Reset icon error when achievement changes
   useEffect(() => {
     setIconError(false);
-  }, [achievement.id, achievement.icon]);
+  }, [achievement.id, achievement.icon, categoryIcon]);
   
   // Calculate display Tier points
   const totalPoints = achievement.tiers.reduce((acc, t) => acc + t.points, 0);
+  
+  // Check if achievement has multiple tiers (tiered achievement)
+  const isTiered = achievement.tiers.length > 1;
+  
+  // Calculate current tier progress and earned AP for tiered achievements
+  const getTierProgress = useMemo(() => {
+    if (!isTiered || !progress) {
+      return null;
+    }
+    
+    const currentCount = progress.current || 0;
+    let earnedAP = 0;
+    let currentTierIndex = -1;
+    
+    // Find which tier the user is currently on and calculate earned AP
+    for (let i = 0; i < achievement.tiers.length; i++) {
+      const tier = achievement.tiers[i];
+      if (currentCount >= tier.count) {
+        earnedAP += tier.points;
+        currentTierIndex = i;
+      }
+    }
+    
+    // If not on any tier yet, they're working toward the first tier
+    if (currentTierIndex === -1) {
+      currentTierIndex = 0;
+    }
+    
+    return {
+      earnedAP,
+      currentTierIndex,
+      currentCount
+    };
+  }, [isTiered, progress, achievement.tiers]);
 
   // Wiki Link
   const wikiUrl = `https://wiki.guildwars2.com/wiki/${encodeURIComponent(achievement.name)}`;
 
+  // Make card clickable in Dashboard and My Path views (when showBreadcrumbs is true)
+  const isClickable = showBreadcrumbs && onNavigateToAchievement;
+  const isHighlighted = highlightedAchievementId === achievement.id;
+
   return (
-    <div className={`relative bg-slate-800 rounded-lg p-4 border ${isDone ? 'border-green-900/50 bg-slate-800/80' : isLocked ? 'border-slate-800 bg-slate-900/50 opacity-60' : 'border-slate-700'} shadow-sm ${isLocked ? '' : 'hover:border-slate-600'} transition-all`}>
+    <div 
+      className={`relative bg-slate-800 rounded-lg p-4 border ${isDone ? 'border-green-900/50 bg-slate-800/80' : isLocked ? 'border-slate-800 bg-slate-900/50 opacity-60' : 'border-slate-700'} shadow-sm ${isLocked ? '' : 'hover:border-slate-600'} transition-all ${isClickable ? 'cursor-pointer' : ''} ${isHighlighted ? 'achievement-highlight' : ''}`}
+      onClick={isClickable ? () => onNavigateToAchievement?.(achievement.id) : undefined}
+    >
       <div className="flex gap-4">
         {/* Icon */}
         <div className="flex-shrink-0 relative">
           <div className={`w-12 h-12 rounded bg-slate-900 border border-slate-700 flex items-center justify-center overflow-hidden ${isDone ? 'ring-2 ring-green-500/50' : ''} ${isLocked ? 'opacity-50' : ''}`}>
-            {achievement.icon && !iconError ? (
+            {displayIcon && !iconError ? (
               <img 
-                src={achievement.icon} 
+                src={displayIcon} 
                 alt={achievement.name} 
                 className="w-full h-full object-cover"
                 onError={() => setIconError(true)}
@@ -526,17 +929,49 @@ const AchievementCard = ({
         <div className="flex-1 min-w-0">
           <div className="flex justify-between items-start gap-2">
             <div>
+              {/* Breadcrumbs */}
+              {showBreadcrumbs && groups && achievementToCategoryMap && (() => {
+                const categoryId = achievementToCategoryMap[achievement.id];
+                if (!categoryId) return null;
+                
+                // Find the category and its group
+                let groupName: string | null = null;
+                let categoryName: string | null = null;
+                
+                for (const group of groups) {
+                  const groupCategories = categories?.[group.id];
+                  if (groupCategories) {
+                    const category = groupCategories.find(cat => cat.id === categoryId);
+                    if (category) {
+                      groupName = group.name;
+                      categoryName = category.name;
+                      break;
+                    }
+                  }
+                }
+                
+                if (groupName && categoryName) {
+                  return (
+                    <div className="flex items-center gap-1 text-xs text-slate-500 mb-1">
+                      <span>{groupName}</span>
+                      <ChevronRight size={12} />
+                      <span>{categoryName}</span>
+                    </div>
+                  );
+                }
+                return null;
+              })()}
               <h3 className={`font-bold text-lg leading-tight ${isDone ? 'text-green-400' : isLocked ? 'text-slate-500' : 'text-slate-100'}`}>
                 {achievement.name}
-                {isLocked && <span className="ml-2 text-xs bg-slate-800 text-slate-500 px-1.5 py-0.5 rounded border border-slate-700 flex items-center gap-1 inline-flex"><Lock size={12} /> Locked</span>}
-                {!isLocked && achievement.flags.includes('Repeatable') && <span className="ml-2 text-xs bg-slate-700 text-slate-300 px-1.5 py-0.5 rounded">Repeatable</span>}
-                {achievement.prerequisites && achievement.prerequisites.length > 0 && (
-                  <span className="ml-2 text-xs bg-blue-900/30 text-blue-300 px-1.5 py-0.5 rounded border border-blue-800/50" title={`Requires ${achievement.prerequisites.length} prerequisite${achievement.prerequisites.length > 1 ? 's' : ''}`}>
-                    {achievement.prerequisites.length} Prereq{achievement.prerequisites.length > 1 ? 's' : ''}
+                {advancedView && (
+                  <span className="ml-2 text-xs bg-slate-700/50 text-slate-400 px-1.5 py-0.5 rounded font-mono">
+                    ID: {achievement.id}
                   </span>
                 )}
-                {unlocksCount !== undefined && unlocksCount > 0 && (
-                  <span className="ml-2 text-xs bg-green-900/30 text-green-300 px-1.5 py-0.5 rounded border border-green-800/50" title={`Unlocks ${unlocksCount} other achievement${unlocksCount > 1 ? 's' : ''}`}>
+                {isLocked && <span className="ml-2 text-xs bg-slate-800 text-slate-500 px-1.5 py-0.5 rounded border border-slate-700 flex items-center gap-1 inline-flex"><Lock size={12} /> Locked</span>}
+                {!isLocked && achievement.flags.includes('Repeatable') && <span className="ml-2 text-xs bg-slate-700 text-slate-300 px-1.5 py-0.5 rounded">Repeatable</span>}
+                {unlocksCount !== undefined && unlocksCount > 1 && (
+                  <span className="ml-2 text-xs bg-green-900/30 text-green-300 px-1.5 py-0.5 rounded border border-green-800/50" title={`Unlocks ${unlocksCount} other achievements`}>
                     Unlocks {unlocksCount}
                   </span>
                 )}
@@ -553,7 +988,10 @@ const AchievementCard = ({
               <div className="flex items-center gap-1">
                 {onToggleStar && (
                   <button
-                    onClick={() => onToggleStar(achievement.id)}
+                    onClick={(e) => {
+                      e.stopPropagation();
+                      onToggleStar(achievement.id);
+                    }}
                     className={`p-1 rounded transition-colors ${
                       isStarred 
                         ? 'text-amber-400 hover:text-amber-300' 
@@ -565,7 +1003,7 @@ const AchievementCard = ({
                   </button>
                 )}
                 <span className="flex items-center text-amber-500 font-bold text-sm bg-amber-950/30 px-2 py-0.5 rounded border border-amber-900/50">
-                  {totalPoints} <span className="ml-1 text-xs">AP</span>
+                  {isTiered && getTierProgress ? `${getTierProgress.earnedAP}/${totalPoints}` : totalPoints} <span className="ml-1 text-xs">AP</span>
                 </span>
               </div>
               <a 
@@ -574,6 +1012,7 @@ const AchievementCard = ({
                 rel="noreferrer" 
                 className="text-slate-500 hover:text-sky-400 transition-colors"
                 title="View on Wiki"
+                onClick={(e) => e.stopPropagation()}
               >
                 <ExternalLink size={16} />
               </a>
@@ -582,76 +1021,228 @@ const AchievementCard = ({
 
           {/* Progress Bar */}
           <div className="mt-4">
-            <div className="flex justify-between text-xs text-slate-400 mb-1">
-              <span>{isDone ? 'Completed' : (progress ? `${current} / ${max}` : 'Not started')}</span>
-              <span>{isDone ? '100%' : `${Math.floor(percent)}%`}</span>
-            </div>
-            <div className="h-2 w-full bg-slate-900 rounded-full overflow-hidden">
-              <div 
-                className={`h-full rounded-full transition-all duration-500 ${isDone ? 'bg-green-500' : 'bg-amber-600'}`}
-                style={{ width: `${isDone ? 100 : percent}%` }}
-              />
-            </div>
+            {isTiered && getTierProgress ? (
+              // Tiered achievement display with tier pips
+              <div className="space-y-1">
+                <div className="flex justify-between text-xs text-slate-400 mb-1">
+                  <span>{isDone ? 'Completed' : (progress ? `${current} / ${max}` : 'Not started')}</span>
+                  <span>{isDone ? '100%' : `${Math.floor(percent)}%`}</span>
+                </div>
+                <div className="relative h-4 w-full bg-slate-900 rounded-full overflow-visible">
+                  {/* Progress fill */}
+                  <div 
+                    className={`h-full rounded-full transition-all duration-500 ${isDone ? 'bg-green-500' : 'bg-amber-600'}`}
+                    style={{ width: `${isDone ? 100 : percent}%` }}
+                  />
+                  
+                  {/* Tier pips/markers - vertical lines at each tier threshold */}
+                  <div className="absolute inset-0">
+                    {achievement.tiers.map((tier, tierIndex) => {
+                      // Skip the final tier (100%) pip
+                      if (tierIndex === achievement.tiers.length - 1) return null;
+                      
+                      const isTierCompleted = getTierProgress.currentCount >= tier.count;
+                      const isCurrentTier = tierIndex === getTierProgress.currentTierIndex && !isTierCompleted;
+                      const tierPosition = (tier.count / max) * 100;
+                      // Check if this pip is within the filled portion of the progress bar
+                      const isWithinProgress = tierPosition <= (isDone ? 100 : percent);
+                      
+                      return (
+                        <div
+                          key={tierIndex}
+                          className="absolute top-0 bottom-0 flex flex-col items-center"
+                          style={{ left: `${tierPosition}%`, transform: 'translateX(-50%)' }}
+                          title={`Tier ${tierIndex + 1}: ${tier.count} objectives - ${tier.points} AP`}
+                        >
+                          {/* Vertical pip marker */}
+                          <div
+                            className={`w-0.5 h-full ${
+                              isTierCompleted && isWithinProgress
+                                ? 'bg-[#2a262b]' 
+                                : isTierCompleted
+                                  ? 'bg-green-300'
+                                  : isCurrentTier 
+                                    ? 'bg-amber-300' 
+                                    : 'bg-slate-600'
+                            }`}
+                          />
+                        </div>
+                      );
+                    })}
+                  </div>
+                </div>
+                
+                {/* Tier AP labels below the bar */}
+                <div className="relative h-4 w-full mt-1">
+                  {achievement.tiers.map((tier, tierIndex) => {
+                    // Hide AP label if AP value is 0
+                    if (tier.points === 0) return null;
+                    
+                    const tierPosition = (tier.count / max) * 100;
+                    const isTierCompleted = getTierProgress.currentCount >= tier.count;
+                    const isCurrentTier = tierIndex === getTierProgress.currentTierIndex && !isTierCompleted;
+                    
+                    return (
+                      <div
+                        key={tierIndex}
+                        className="absolute flex flex-col items-center"
+                        style={{ left: `${tierPosition}%`, transform: 'translateX(-50%)' }}
+                        title={`Tier ${tierIndex + 1}: ${tier.count} objectives`}
+                      >
+                        <span className={`text-[10px] font-medium whitespace-nowrap ${
+                          isTierCompleted 
+                            ? 'text-amber-500' 
+                            : isCurrentTier 
+                              ? 'text-amber-400' 
+                              : 'text-slate-500'
+                        }`}>
+                          {tier.points}AP
+                        </span>
+                      </div>
+                    );
+                  })}
+                </div>
+              </div>
+            ) : (
+              // Non-tiered achievement display (original)
+              <>
+                <div className="flex justify-between text-xs text-slate-400 mb-1">
+                  <span>{isDone ? 'Completed' : (progress ? `${current} / ${max}` : 'Not started')}</span>
+                  <span>{isDone ? '100%' : `${Math.floor(percent)}%`}</span>
+                </div>
+                <div className="h-2 w-full bg-slate-900 rounded-full overflow-hidden">
+                  <div 
+                    className={`h-full rounded-full transition-all duration-500 ${isDone ? 'bg-green-500' : 'bg-amber-600'}`}
+                    style={{ width: `${isDone ? 100 : percent}%` }}
+                  />
+                </div>
+              </>
+            )}
           </div>
           
           {/* Rewards / Tags */}
           <div className="mt-3 flex flex-wrap gap-2">
             {achievement.rewards?.map((reward, idx) => (
-              <div key={idx} className="inline-flex items-center gap-1 px-2 py-1 rounded text-xs font-medium bg-indigo-900/30 text-indigo-300 border border-indigo-800/50">
-                {reward.type === 'Mastery' && <Star size={12} className="text-yellow-400" fill="currentColor" />}
-                {reward.type === 'Title' && <Trophy size={12} />}
-                {reward.type === 'Item' && (
-                  reward.item?.icon ? (
-                    <img src={reward.item.icon} alt={reward.item.name} className="w-4 h-4 object-cover" />
-                  ) : (
-                    <div className="w-3 h-3 bg-indigo-500 rounded-full" />
-                  )
-                )}
-                <span>
-                  {reward.type === 'Item' && reward.item ? (
-                    <>
-                      {reward.item.name}
-                      {reward.count && reward.count > 1 && ` x${reward.count}`}
-                      {reward.item.rarity && (
-                        <span className={`ml-1 text-[10px] ${
-                          reward.item.rarity === 'Legendary' ? 'text-orange-400' :
-                          reward.item.rarity === 'Ascended' ? 'text-fuchsia-400' :
-                          reward.item.rarity === 'Exotic' ? 'text-yellow-400' :
-                          reward.item.rarity === 'Rare' ? 'text-blue-400' :
-                          reward.item.rarity === 'Masterwork' ? 'text-green-400' :
-                          'text-slate-400'
-                        }`}>
-                          [{reward.item.rarity}]
-                        </span>
-                      )}
-                    </>
-                  ) : reward.type === 'Title' && reward.title ? (
-                    <>
-                      {renderColoredText(reward.title.name)}
-                    </>
-                  ) : (
-                    <>
-                      {reward.type} {reward.region ? `(${reward.region})` : ''}
-                    </>
+              <ItemTooltip key={idx} item={reward.type === 'Item' ? reward.item : undefined} count={reward.count}>
+                <div className="inline-flex items-center gap-1 px-2 py-1 rounded text-xs font-medium bg-indigo-900/30 text-indigo-300 border border-indigo-800/50 cursor-help">
+                  {reward.type === 'Mastery' && <Star size={12} className="text-yellow-400" fill="currentColor" />}
+                  {reward.type === 'Title' && <Trophy size={12} />}
+                  {reward.type === 'Item' && (
+                    reward.item?.icon ? (
+                      <img src={reward.item.icon} alt={reward.item.name} className="w-4 h-4 object-cover" />
+                    ) : (
+                      <div className="w-3 h-3 bg-indigo-500 rounded-full" />
+                    )
                   )}
-                </span>
-              </div>
+                  <span>
+                    {reward.type === 'Item' && reward.item ? (
+                      <>
+                        {reward.item.name}
+                        {reward.count && reward.count > 1 && ` x${reward.count}`}
+                        {reward.item.rarity && (
+                          <span className={`ml-1 text-[10px] ${
+                            reward.item.rarity === 'Legendary' ? 'text-orange-400' :
+                            reward.item.rarity === 'Ascended' ? 'text-fuchsia-400' :
+                            reward.item.rarity === 'Exotic' ? 'text-yellow-400' :
+                            reward.item.rarity === 'Rare' ? 'text-blue-400' :
+                            reward.item.rarity === 'Masterwork' ? 'text-green-400' :
+                            'text-slate-400'
+                          }`}>
+                            [{reward.item.rarity}]
+                          </span>
+                        )}
+                      </>
+                    ) : reward.type === 'Title' && reward.title ? (
+                      <>
+                        {renderColoredText(reward.title.name)}
+                      </>
+                    ) : (
+                      <>
+                        {reward.type} {reward.region ? `(${reward.region})` : ''}
+                      </>
+                    )}
+                  </span>
+                </div>
+              </ItemTooltip>
             ))}
             {achievement.flags.includes('CategoryDisplay') && (() => {
               // Generate explanation for why this achievement is meta
               const metaReasons: string[] = [];
+              const cache = achievementsCache || {};
               
+              // Helper to check if an achievement grants a mount
+              const grantsMount = (ach: Achievement): boolean => {
+                if (!ach.rewards) return false;
+                return ach.rewards.some(reward => {
+                  if (reward.type === 'Item' && reward.item) {
+                    const itemName = reward.item.name.toLowerCase();
+                    return itemName.includes('mount') || 
+                           itemName.includes('skyscale') || 
+                           itemName.includes('griffon') || 
+                           itemName.includes('roller beetle') || 
+                           itemName.includes('jackal') || 
+                           itemName.includes('raptor') ||
+                           itemName.includes('warclaw') ||
+                           itemName.includes('siege turtle') ||
+                           itemName.includes('skiff');
+                  }
+                  return false;
+                });
+              };
+              
+              // Helper to get mount name from achievement
+              const getMountName = (ach: Achievement): string | null => {
+                if (!ach.rewards) return null;
+                for (const reward of ach.rewards) {
+                  if (reward.type === 'Item' && reward.item) {
+                    const itemName = reward.item.name.toLowerCase();
+                    if (itemName.includes('skyscale')) return 'Skyscale';
+                    if (itemName.includes('griffon')) return 'Griffon';
+                    if (itemName.includes('roller beetle')) return 'Roller Beetle';
+                    if (itemName.includes('jackal')) return 'Jackal';
+                    if (itemName.includes('raptor')) return 'Raptor';
+                    if (itemName.includes('warclaw')) return 'Warclaw';
+                    if (itemName.includes('siege turtle')) return 'Siege Turtle';
+                    if (itemName.includes('skiff')) return 'Skiff';
+                    if (itemName.includes('mount')) return 'Mount';
+                  }
+                }
+                return null;
+              };
+              
+              // Check if this achievement unlocks mount achievement chains
+              if (unlocksMap && unlocksMap[achievement.id]) {
+                const unlockedIds = unlocksMap[achievement.id];
+                // Check if any unlocked achievement grants a mount
+                for (const unlockedId of unlockedIds) {
+                  const unlockedAch = cache[unlockedId];
+                  if (unlockedAch && grantsMount(unlockedAch)) {
+                    const mountName = getMountName(unlockedAch);
+                    if (mountName) {
+                      metaReasons.push(`${mountName} mount`);
+                      break; // Only show first mount found
+                    }
+                  }
+                }
+              }
+              
+              // Check direct rewards
               if (achievement.rewards) {
                 for (const reward of achievement.rewards) {
                   if (reward.type === 'Item' && reward.item) {
                     const itemName = reward.item.name.toLowerCase();
                     const itemType = reward.item.type?.toLowerCase() || '';
                     
-                    // Check for bags (especially 20-slot bags)
-                    const isBag = itemType === 'bag' || itemType === 'container' || 
-                                  itemName.includes('bag') || itemName.includes('purse') || itemName.includes('jar');
+                    // Check for inventory bags (exclude loot boxes/containers)
+                    // Loot boxes typically have "box" in the name and are containers, not bags
+                    const isLootBox = itemName.includes('box') || 
+                                     itemName.includes('chest') || 
+                                     itemName.includes('crate') ||
+                                     (itemType === 'container' && !itemName.includes('bag'));
+                    const isInventoryBag = itemType === 'bag' || 
+                                          (itemName.includes('bag') && !isLootBox && !itemName.includes('box'));
                     
-                    if (isBag) {
+                    if (isInventoryBag) {
                       // Check item details for bag size
                       const bagSize = reward.item.details?.size;
                       if (bagSize === 20) {
@@ -660,108 +1251,203 @@ const AchievementCard = ({
                         metaReasons.push(`Grants free ${bagSize}-slot bag`);
                       } else if (itemName.includes('20') || itemName.includes('twenty')) {
                         metaReasons.push('Grants free 20-slot bag');
-                      } else if (itemName.includes('18') || itemName.includes('fifteen') || itemName.includes('15')) {
-                        metaReasons.push('Grants free bag');
-                      } else {
-                        metaReasons.push('Grants bag');
+                      } else if (bagSize && bagSize > 0) {
+                        metaReasons.push(`Grants free ${bagSize}-slot bag`);
                       }
+                      // Don't add generic "Grants bag" for bags without size info
                     }
-                    // Check for mounts
-                    else if (itemName.includes('mount') || itemName.includes('skyscale') || itemName.includes('griffon') || 
-                             itemName.includes('roller beetle') || itemName.includes('jackal') || itemName.includes('raptor')) {
-                      metaReasons.push('Grants mount');
+                    // Check for mounts (direct reward)
+                    else if (itemName.includes('mount') || 
+                             itemName.includes('skyscale') || 
+                             itemName.includes('griffon') || 
+                             itemName.includes('roller beetle') || 
+                             itemName.includes('jackal') || 
+                             itemName.includes('raptor') ||
+                             itemName.includes('warclaw') ||
+                             itemName.includes('siege turtle') ||
+                             itemName.includes('skiff')) {
+                      // Determine mount name
+                      let mountName = 'Mount';
+                      if (itemName.includes('skyscale')) mountName = 'Skyscale';
+                      else if (itemName.includes('griffon')) mountName = 'Griffon';
+                      else if (itemName.includes('roller beetle')) mountName = 'Roller Beetle';
+                      else if (itemName.includes('jackal')) mountName = 'Jackal';
+                      else if (itemName.includes('raptor')) mountName = 'Raptor';
+                      else if (itemName.includes('warclaw')) mountName = 'Warclaw';
+                      else if (itemName.includes('siege turtle')) mountName = 'Siege Turtle';
+                      else if (itemName.includes('skiff')) mountName = 'Skiff';
+                      metaReasons.push(`Grants ${mountName} mount`);
+                    }
+                    // Check for legendary items
+                    else if (reward.item.rarity === 'Legendary') {
+                      metaReasons.push('Grants Legendary item');
                     }
                     // Check for legendary components
                     else if (itemName.includes('legendary') || itemName.includes('precursor') || 
                              itemName.includes('gift of') || itemName.includes('mystic clover')) {
                       metaReasons.push('Grants legendary component');
                     }
-                    // Check for unique/valuable items
-                    else if (reward.item.rarity === 'Legendary' || reward.item.rarity === 'Ascended') {
-                      metaReasons.push(`Grants ${reward.item.rarity} item`);
-                    }
                   }
-                  // Note: Mastery Point and Title rewards are already tagged separately, so we skip them here
                 }
               }
               
-              const metaExplanation = metaReasons.length > 0 
-                ? metaReasons[0] // Show first reason
-                : 'High-value meta achievement';
+              // Only show meta tag if we have a specific reason
+              if (metaReasons.length > 0) {
+                const metaExplanation = metaReasons[0]; // Show first reason
+                return (
+                  <span 
+                    className="inline-flex items-center gap-1 px-2 py-1 rounded text-xs font-medium bg-purple-900/30 text-purple-300 border border-purple-800/50"
+                    title={metaExplanation}
+                  >
+                    Meta: {metaExplanation}
+                  </span>
+                );
+              }
               
-              return (
-                <span 
-                  className="inline-flex items-center gap-1 px-2 py-1 rounded text-xs font-medium bg-purple-900/30 text-purple-300 border border-purple-800/50"
-                  title={metaExplanation}
-                >
-                  Meta: {metaExplanation}
-                </span>
-              );
+              // No specific reason found - don't show meta tag
+              return null;
             })()}
           </div>
 
-          {/* Prerequisite Chain */}
-          {achievement.prerequisites && achievement.prerequisites.length > 0 && (
-            <div className="mt-3 border-t border-slate-700 pt-3">
-              <button
-                onClick={() => {
-                  setShowPrerequisites(!showPrerequisites);
-                  // Fetch prerequisite data if needed
-                  if (!showPrerequisites && onNeedAchievements) {
-                    const missingIds = achievement.prerequisites!.filter(id => !cache[id]);
-                    if (missingIds.length > 0) {
-                      onNeedAchievements(missingIds);
-                    }
-                  }
-                }}
-                className="w-full flex items-center justify-between text-sm text-slate-400 hover:text-slate-200 transition-colors"
-              >
-                <div className="flex items-center gap-2">
-                  <GitBranch size={16} />
-                  <span>Prerequisite Chain ({achievement.prerequisites.length})</span>
-                </div>
-                {showPrerequisites ? <ChevronDown size={16} /> : <ChevronRight size={16} />}
-              </button>
+          {/* Achievement Chain */}
+          {((achievement.prerequisites && achievement.prerequisites.length > 0) || (unlocksMap && unlocksMap[achievement.id] && unlocksMap[achievement.id].length > 0)) && (() => {
+            // Quick calculation of chain length for button label
+            const collectChainIds = (achId: number, visited: Set<number>): Set<number> => {
+              if (visited.has(achId)) return new Set();
+              visited.add(achId);
               
-              {showPrerequisites && (
-                <PrerequisiteChain
-                  achievement={achievement}
-                  prerequisites={achievement.prerequisites!}
-                  achievementsCache={cache}
-                  userProgress={progressMap}
-                  accountAccess={account}
-                  isAchievementLocked={checkLocked}
-                  onNavigateToAchievement={onNavigateToAchievement}
-                  achievementToCategoryMap={achievementToCategoryMap}
-                />
-              )}
-            </div>
-          )}
+              const allIds = new Set<number>();
+              allIds.add(achId);
+              
+              const ach = cache[achId];
+              if (ach && ach.prerequisites) {
+                ach.prerequisites.forEach(prereqId => {
+                  const nested = collectChainIds(prereqId, visited);
+                  nested.forEach(id => allIds.add(id));
+                });
+              }
+              
+              const unlocks = unlocksMap?.[achId] || [];
+              unlocks.forEach(unlockId => {
+                const nested = collectChainIds(unlockId, visited);
+                nested.forEach(id => allIds.add(id));
+              });
+              
+              return allIds;
+            };
+            
+            const chainIds = collectChainIds(achievement.id, new Set());
+            const chainLength = chainIds.size;
+            
+            // Calculate position in chain by building a simple topological order
+            // This is a simplified version - the full calculation happens in the component
+            const buildSimpleChain = (): number => {
+              const allAchs = Array.from(chainIds).map(id => cache[id]).filter(Boolean) as Achievement[];
+              if (allAchs.length === 0) return 1;
+              
+              // Simple topological sort
+              const sorted: Achievement[] = [];
+              const visited = new Set<number>();
+              
+              const visit = (ach: Achievement) => {
+                if (visited.has(ach.id)) return;
+                visited.add(ach.id);
+                
+                if (ach.prerequisites) {
+                  ach.prerequisites.forEach(prereqId => {
+                    if (chainIds.has(prereqId)) {
+                      const prereq = cache[prereqId];
+                      if (prereq) visit(prereq);
+                    }
+                  });
+                }
+                
+                sorted.push(ach);
+              };
+              
+              allAchs.forEach(ach => {
+                if (!visited.has(ach.id)) visit(ach);
+              });
+              
+              const position = sorted.findIndex(ach => ach.id === achievement.id) + 1;
+              return position || 1;
+            };
+            
+            const estimatedPosition = buildSimpleChain();
+            
+            return (
+              <div className="mt-3 border-t border-slate-700 pt-3">
+                <button
+                  onClick={(e) => {
+                    e.stopPropagation();
+                    setShowPrerequisites(!showPrerequisites);
+                    // Fetch chain data if needed
+                    if (!showPrerequisites && onNeedAchievements) {
+                      const missingIds = Array.from(chainIds).filter(id => !cache[id]);
+                      if (missingIds.length > 0) {
+                        onNeedAchievements(missingIds);
+                      }
+                    }
+                  }}
+                  className="w-full flex items-center justify-between text-sm text-slate-400 hover:text-slate-200 transition-colors"
+                >
+                  <div className="flex items-center gap-2">
+                    <GitBranch size={16} />
+                    <span>Achievement Chain ({estimatedPosition}/{chainLength})</span>
+                  </div>
+                  {showPrerequisites ? <ChevronDown size={16} /> : <ChevronRight size={16} />}
+                </button>
+                
+                {showPrerequisites && (
+                  <AchievementChain
+                    achievement={achievement}
+                    prerequisites={achievement.prerequisites || []}
+                    unlocks={unlocksMap?.[achievement.id] || []}
+                    achievementsCache={cache}
+                    userProgress={progressMap}
+                    accountAccess={account}
+                    isAchievementLocked={checkLocked}
+                    onNavigateToAchievement={onNavigateToAchievement}
+                    achievementToCategoryMap={achievementToCategoryMap}
+                    onNeedAchievements={onNeedAchievements}
+                    unlocksMap={unlocksMap}
+                  />
+                )}
+              </div>
+            );
+          })()}
+
         </div>
       </div>
     </div>
   );
 };
 
-// Prerequisite Chain Visualization Component
-const PrerequisiteChain = ({
+// Achievement Chain Visualization Component
+const AchievementChain = ({
   achievement,
   prerequisites,
+  unlocks,
   achievementsCache,
   userProgress,
   accountAccess,
   isAchievementLocked,
   onNavigateToAchievement,
-  achievementToCategoryMap
+  achievementToCategoryMap,
+  onNeedAchievements,
+  unlocksMap
 }: {
   achievement: Achievement;
   prerequisites: number[];
+  unlocks: number[];
   achievementsCache: Record<number, Achievement>;
   userProgress: Record<number, UserProgress>;
   accountAccess: string[];
   isAchievementLocked?: (achievement: Achievement) => boolean;
   onNavigateToAchievement?: (achievementId: number) => void;
   achievementToCategoryMap?: Record<number, number>;
+  onNeedAchievements?: (ids: number[]) => void;
+  unlocksMap?: Record<number, number[]>;
 }) => {
   // Map mastery region names to account access names
   const regionToAccessMap: Record<string, string> = {
@@ -804,243 +1490,398 @@ const PrerequisiteChain = ({
     return isAchievementLocked(ach);
   };
 
-  const prerequisiteAchievements = prerequisites
+  // Build complete chain: collect all prerequisites and unlocks recursively
+  const collectAllPrerequisites = (achId: number, visited: Set<number>): Set<number> => {
+    if (visited.has(achId)) return new Set();
+    visited.add(achId);
+    
+    const ach = achievementsCache[achId];
+    if (!ach || !ach.prerequisites || ach.prerequisites.length === 0) {
+      return new Set();
+    }
+    
+    const allIds = new Set<number>();
+    for (const prereqId of ach.prerequisites) {
+      if (!visited.has(prereqId)) {
+        allIds.add(prereqId);
+        const nested = collectAllPrerequisites(prereqId, visited);
+        nested.forEach(id => allIds.add(id));
+      }
+    }
+    return allIds;
+  };
+
+  const collectAllUnlocks = (achId: number, visited: Set<number>): Set<number> => {
+    if (visited.has(achId)) return new Set();
+    visited.add(achId);
+    
+    const unlockIds = unlocksMap?.[achId] || [];
+    if (unlockIds.length === 0) {
+      return new Set();
+    }
+    
+    const allIds = new Set<number>();
+    for (const unlockId of unlockIds) {
+      if (!visited.has(unlockId)) {
+        allIds.add(unlockId);
+        const nested = collectAllUnlocks(unlockId, visited);
+        nested.forEach(id => allIds.add(id));
+      }
+    }
+    return allIds;
+  };
+
+  // Collect all achievements in the chain
+  const allChainIds = new Set<number>();
+  allChainIds.add(achievement.id); // Include current achievement
+  
+  // Add all prerequisites
+  const visitedPrereqs = new Set<number>();
+  prerequisites.forEach(id => {
+    allChainIds.add(id);
+    const nested = collectAllPrerequisites(id, visitedPrereqs);
+    nested.forEach(id => allChainIds.add(id));
+  });
+  
+  // Add all unlocks
+  const visitedUnlocks = new Set<number>();
+  unlocks.forEach(id => {
+    allChainIds.add(id);
+    const nested = collectAllUnlocks(id, visitedUnlocks);
+    nested.forEach(id => allChainIds.add(id));
+  });
+
+  // Fetch missing achievements if needed
+  const missingIds = Array.from(allChainIds).filter(id => !achievementsCache[id]);
+  if (missingIds.length > 0 && onNeedAchievements) {
+    onNeedAchievements(missingIds);
+  }
+
+  // Build a graph to topologically sort the chain
+  const chainAchievements = Array.from(allChainIds)
     .map(id => achievementsCache[id])
     .filter((ach): ach is Achievement => ach !== undefined);
 
-  if (prerequisiteAchievements.length === 0) {
+  if (chainAchievements.length === 0) {
     return (
       <div className="mt-2 text-xs text-slate-500 italic">
-        Loading prerequisite data...
+        Loading chain data...
       </div>
     );
   }
 
-  // Separate prerequisites into: completed, in-progress, not-started, locked
-  const completed = prerequisiteAchievements.filter(ach => {
-    const prog = userProgress[ach.id];
-    return prog && (prog.done || (prog.repeated && prog.repeated > 0));
-  });
-
-  const inProgress = prerequisiteAchievements.filter(ach => {
-    const prog = userProgress[ach.id];
-    return prog && !prog.done && prog.current && prog.current > 0;
-  });
-
-  const notStarted = prerequisiteAchievements.filter(ach => {
-    const prog = userProgress[ach.id];
-    const isLocked = checkIsLocked(ach);
-    return !prog && !isLocked;
-  });
-
-  const locked = prerequisiteAchievements.filter(ach => checkIsLocked(ach));
-
-  // Starting points are achievements with no prerequisites or all prerequisites completed
-  const startingPoints = prerequisiteAchievements.filter(ach => {
-    if (!ach.prerequisites || ach.prerequisites.length === 0) {
-      return true; // No prerequisites = starting point
+  // Topological sort: build dependency graph and sort
+  const sortedChain: Achievement[] = [];
+  const visited = new Set<number>();
+  const inProgress = new Set<number>();
+  
+  const visit = (ach: Achievement) => {
+    if (visited.has(ach.id)) return;
+    if (inProgress.has(ach.id)) return; // Cycle detection
+    
+    inProgress.add(ach.id);
+    
+    // Visit prerequisites first
+    if (ach.prerequisites) {
+      for (const prereqId of ach.prerequisites) {
+        if (allChainIds.has(prereqId)) {
+          const prereq = achievementsCache[prereqId];
+          if (prereq) visit(prereq);
+        }
+      }
     }
-    // All prerequisites completed = starting point
-    return ach.prerequisites.every(prereqId => {
-      const prereqProg = userProgress[prereqId];
-      return prereqProg && (prereqProg.done || (prereqProg.repeated && prereqProg.repeated > 0));
-    });
+    
+    inProgress.delete(ach.id);
+    visited.add(ach.id);
+    sortedChain.push(ach);
+  };
+  
+  // Visit all achievements
+  chainAchievements.forEach(ach => {
+    if (!visited.has(ach.id)) {
+      visit(ach);
+    }
   });
+
+  // Find position of current achievement in sorted chain
+  const currentPosition = sortedChain.findIndex(ach => ach.id === achievement.id) + 1;
+  const totalSteps = sortedChain.length;
+
+  // Helper to check if an achievement is truly 100% completed (not just unlocked)
+  const isFullyCompleted = (ach: Achievement, prog?: UserProgress): boolean => {
+    if (!prog) return false;
+    
+    // Check if it's repeated (repeatable achievements)
+    if (prog.repeated && prog.repeated > 0) return true;
+    
+    // Check if current >= max (for progress-based achievements)
+    if (prog.current !== undefined && prog.max !== undefined) {
+      return prog.current >= prog.max;
+    }
+    
+    // Fallback to done flag (but this might indicate "unlocked" rather than "completed")
+    // Only trust it if there's no progress tracking
+    if (prog.done && prog.current === undefined && prog.max === undefined) {
+      return true;
+    }
+    
+    return false;
+  };
+  
+  // Helper to check if an achievement has any progress (in progress, not just started)
+  const hasProgress = (ach: Achievement, prog?: UserProgress): boolean => {
+    if (!prog) return false;
+    if (isFullyCompleted(ach, prog)) return false;
+    
+    // Check if there's meaningful progress
+    if (prog.current !== undefined && prog.max !== undefined) {
+      return prog.current > 0;
+    }
+    
+    return false;
+  };
+
+  // Find the next required achievement (first uncompleted with all prerequisites met)
+  const findNextAchievement = (): Achievement | null => {
+    const currentIndex = sortedChain.findIndex(a => a.id === achievement.id);
+    
+    // Helper to check if all prerequisites are met for an achievement
+    const allPrereqsMet = (ach: Achievement): boolean => {
+      if (!ach.prerequisites || ach.prerequisites.length === 0) return true;
+      
+      return ach.prerequisites.every(prereqId => {
+        const prereqProg = userProgress[prereqId];
+        const prereqAch = achievementsCache[prereqId];
+        return prereqAch && isFullyCompleted(prereqAch, prereqProg);
+      });
+    };
+    
+    // First, check achievements before the current one (uncompleted prerequisites)
+    for (let i = 0; i < currentIndex; i++) {
+      const ach = sortedChain[i];
+      const prog = userProgress[ach.id];
+      const completed = isFullyCompleted(ach, prog);
+      
+      if (!completed && allPrereqsMet(ach)) {
+        return ach; // This is the next one (uncompleted prerequisite)
+      }
+    }
+    
+    // Then, check achievements after the current one
+    for (let i = currentIndex + 1; i < sortedChain.length; i++) {
+      const ach = sortedChain[i];
+      const prog = userProgress[ach.id];
+      const completed = isFullyCompleted(ach, prog);
+      
+      if (!completed && allPrereqsMet(ach)) {
+        return ach; // This is the next one
+      }
+    }
+    
+    return null;
+  };
+  
+  const nextAchievement = findNextAchievement();
+  
+  // Determine status for each achievement in chain
+  const getAchievementStatus = (ach: Achievement): 'completed' | 'next' | 'in-progress' | 'future' | 'current' => {
+    if (ach.id === achievement.id) return 'current';
+    
+    const prog = userProgress[ach.id];
+    if (isFullyCompleted(ach, prog)) return 'completed';
+    
+    // Check if this is the next required achievement
+    if (nextAchievement && nextAchievement.id === ach.id) {
+      return 'next';
+    }
+    
+    // Check if it's in progress
+    if (hasProgress(ach, prog)) {
+      return 'in-progress';
+    }
+    
+    return 'future';
+  };
+
+  // Detect simultaneous unlocks (achievements unlocked at the same time, not in a chain)
+  // Returns a map of achievement ID to its simultaneous unlock group
+  const simultaneousUnlockGroups = new Map<number, Achievement[]>();
+  
+  sortedChain.forEach(ach => {
+    const directUnlocks = unlocksMap?.[ach.id] || [];
+    if (directUnlocks.length <= 1) return;
+    
+    // Check if all direct unlocks appear consecutively in the sorted chain right after this achievement
+    const achIndex = sortedChain.findIndex(a => a.id === ach.id);
+    if (achIndex === -1 || achIndex === sortedChain.length - 1) return;
+    
+    // Get the direct unlocks that are in the chain
+    const chainUnlocks = directUnlocks
+      .filter(id => allChainIds.has(id))
+      .map(id => achievementsCache[id])
+      .filter((a): a is Achievement => a !== undefined);
+    
+    if (chainUnlocks.length <= 1) return;
+    
+    // Check if they appear consecutively after this achievement
+    const nextIndices = chainUnlocks.map(u => sortedChain.findIndex(a => a.id === u.id)).filter(i => i !== -1).sort((a, b) => a - b);
+    
+    // If all unlocks are consecutive starting right after this achievement, they're simultaneous
+    if (nextIndices.length === chainUnlocks.length && 
+        nextIndices[0] === achIndex + 1 && 
+        nextIndices[nextIndices.length - 1] === achIndex + chainUnlocks.length) {
+      // Verify none of them have prerequisites that are also in the chain (which would make it a chain, not simultaneous)
+      const hasChainPrereqs = chainUnlocks.some(u => 
+        u.prerequisites?.some(prereqId => allChainIds.has(prereqId) && prereqId !== ach.id)
+      );
+      
+      if (!hasChainPrereqs) {
+        // Mark all unlocks in this group
+        chainUnlocks.forEach(unlock => {
+          simultaneousUnlockGroups.set(unlock.id, chainUnlocks);
+        });
+      }
+    }
+  });
+  
+  // Helper to check if an achievement is part of a simultaneous unlock group
+  const isInSimultaneousGroup = (achId: number): boolean => {
+    return simultaneousUnlockGroups.has(achId);
+  };
+  
+  // Helper to get the simultaneous unlock group for an achievement
+  const getSimultaneousGroup = (achId: number): Achievement[] | null => {
+    return simultaneousUnlockGroups.get(achId) || null;
+  };
 
   return (
-    <div className="mt-3 space-y-3">
-      {/* Starting Points */}
-      {startingPoints.length > 0 && (
-        <div>
-          <div className="flex items-center gap-2 mb-2">
-            <PlayCircle size={14} className="text-green-400" />
-            <span className="text-xs font-semibold text-green-400">Ready to Start</span>
-          </div>
-          <div className="space-y-2 ml-6">
-            {startingPoints.map(ach => {
-              const prog = userProgress[ach.id];
-              const isDone = prog && (prog.done || (prog.repeated && prog.repeated > 0));
-              return (
-                <div
-                  key={ach.id}
-                  className={`p-2 rounded border ${
-                    isDone
-                      ? 'bg-green-900/20 border-green-800/50'
-                      : 'bg-slate-900/50 border-slate-700'
-                  } ${onNavigateToAchievement ? 'cursor-pointer hover:bg-slate-800/70 transition-colors' : ''}`}
-                  onClick={() => onNavigateToAchievement?.(ach.id)}
-                >
-                  <div className="flex items-center gap-2">
-                    {isDone ? (
-                      <CheckCircle2 size={14} className="text-green-400 flex-shrink-0" />
-                    ) : (
-                      <div className="w-3 h-3 rounded-full bg-green-500/50 border border-green-400 flex-shrink-0" />
-                    )}
-                    <span className={`text-xs ${isDone ? 'text-green-300 line-through' : 'text-slate-200'}`}>
-                      {ach.name}
+    <div className="mt-3 space-y-2">
+      {/* Chain List */}
+      <div className="space-y-1">
+        {sortedChain.map((ach, index) => {
+          const stepNumber = index + 1;
+          const status = getAchievementStatus(ach);
+          const isCurrent = ach.id === achievement.id;
+          const prog = userProgress[ach.id];
+          const isFullyDone = isFullyCompleted(ach, prog);
+          const hasProg = hasProgress(ach, prog);
+          const isSimultaneousUnlock = isInSimultaneousGroup(ach.id);
+          const simultaneousGroup = getSimultaneousGroup(ach.id);
+          const isFirstInGroup = simultaneousGroup && simultaneousGroup[0].id === ach.id;
+          
+          // Calculate progress percentage if available
+          const current = prog?.current || 0;
+          const max = prog?.max || ach.tiers[ach.tiers.length - 1]?.count || 1;
+          const percent = max > 0 ? Math.min(100, Math.max(0, (current / max) * 100)) : 0;
+          
+          let bgColor = 'bg-slate-900/50';
+          let borderColor = 'border-slate-700';
+          let textColor = 'text-slate-200';
+          let iconColor = 'text-slate-400';
+          
+          if (status === 'completed' || isFullyDone) {
+            bgColor = 'bg-green-900/20';
+            borderColor = 'border-green-800/50';
+            textColor = 'text-green-300';
+            iconColor = 'text-green-400';
+          } else if (status === 'next') {
+            bgColor = 'bg-amber-900/20';
+            borderColor = 'border-amber-800/50';
+            textColor = 'text-amber-300';
+            iconColor = 'text-amber-400';
+          } else if (status === 'in-progress') {
+            bgColor = 'bg-amber-900/20';
+            borderColor = 'border-amber-800/50';
+            textColor = 'text-amber-300';
+            iconColor = 'text-amber-400';
+          } else if (status === 'future') {
+            bgColor = 'bg-slate-900/50';
+            borderColor = 'border-slate-800';
+            textColor = 'text-slate-500';
+            iconColor = 'text-slate-500';
+          }
+          
+          return (
+            <div key={ach.id}>
+              {isFirstInGroup && (
+                <div className="mb-1 ml-2 text-[10px] text-slate-500 italic">
+                  Unlocks {simultaneousGroup!.length} achievements simultaneously:
+                </div>
+              )}
+              <div
+                className={`p-2 rounded border ${bgColor} ${borderColor} ${onNavigateToAchievement ? 'cursor-pointer hover:opacity-80 transition-opacity' : ''} ${isCurrent ? 'ring-2 ring-amber-500/50' : ''} ${isSimultaneousUnlock ? 'ml-4' : ''}`}
+                onClick={() => onNavigateToAchievement?.(ach.id)}
+              >
+                <div className="flex items-center gap-2">
+                  {isSimultaneousUnlock ? (
+                    <span className={`text-xs ${iconColor} min-w-[2rem] flex items-center justify-center`}>
+                      •
                     </span>
-                  </div>
-                </div>
-              );
-            })}
-          </div>
-        </div>
-      )}
-
-      {/* In Progress */}
-      {inProgress.length > 0 && (
-        <div>
-          <div className="flex items-center gap-2 mb-2">
-            <ArrowRight size={14} className="text-amber-400" />
-            <span className="text-xs font-semibold text-amber-400">In Progress</span>
-          </div>
-          <div className="space-y-2 ml-6">
-            {inProgress.map(ach => {
-              const prog = userProgress[ach.id];
-              const current = prog?.current || 0;
-              const max = prog?.max || ach.tiers[ach.tiers.length - 1]?.count || 1;
-              const percent = Math.min(100, Math.max(0, (current / max) * 100));
-              return (
-                <div 
-                  key={ach.id} 
-                  className={`p-2 rounded bg-slate-900/50 border border-slate-700 ${onNavigateToAchievement ? 'cursor-pointer hover:bg-slate-800/70 transition-colors' : ''}`}
-                  onClick={() => onNavigateToAchievement?.(ach.id)}
-                >
-                  <div className="flex items-center gap-2 mb-1">
-                    <div className="w-3 h-3 rounded-full bg-amber-500/50 border border-amber-400 flex-shrink-0" />
-                    <span className="text-xs text-slate-200">{ach.name}</span>
-                  </div>
-                  <div className="ml-5">
-                    <div className="h-1 w-full bg-slate-800 rounded-full overflow-hidden">
-                      <div
-                        className="h-full bg-amber-500 transition-all"
-                        style={{ width: `${percent}%` }}
-                      />
-                    </div>
-                    <div className="text-[10px] text-slate-400 mt-0.5">
-                      {current} / {max} ({Math.floor(percent)}%)
-                    </div>
-                  </div>
-                </div>
-              );
-            })}
-          </div>
-        </div>
-      )}
-
-      {/* Not Started */}
-      {notStarted.length > 0 && (
-        <div>
-          <div className="flex items-center gap-2 mb-2">
-            <Circle size={14} className="text-slate-400" />
-            <span className="text-xs font-semibold text-slate-400">Not Started</span>
-          </div>
-          <div className="space-y-2 ml-6">
-            {notStarted.map(ach => (
-              <div 
-                key={ach.id} 
-                className={`p-2 rounded bg-slate-900/50 border border-slate-700 ${onNavigateToAchievement ? 'cursor-pointer hover:bg-slate-800/70 transition-colors' : ''}`}
-                onClick={() => onNavigateToAchievement?.(ach.id)}
-              >
-                <div className="flex items-center gap-2">
-                  <div className="w-3 h-3 rounded-full bg-slate-600 border border-slate-500 flex-shrink-0" />
-                  <span className="text-xs text-slate-400">{ach.name}</span>
+                  ) : (
+                    <span className={`text-xs font-mono ${iconColor} min-w-[2rem]`}>
+                      {stepNumber}.
+                    </span>
+                  )}
+                  {isFullyDone ? (
+                    <CheckCircle2 size={14} className={`${iconColor} flex-shrink-0`} />
+                  ) : status === 'future' ? (
+                    <Lock size={12} className={`${iconColor} flex-shrink-0`} />
+                  ) : (
+                    <div className={`w-3 h-3 rounded-full ${status === 'next' || status === 'in-progress' ? 'bg-amber-500/50 border border-amber-400' : 'bg-slate-600 border border-slate-500'} flex-shrink-0`} />
+                  )}
+                  <span className={`text-xs ${textColor} ${isCurrent ? 'font-bold' : isFullyDone ? 'line-through' : ''}`}>
+                    {ach.name}
+                    {hasProg && !isFullyDone && (
+                      <span className="ml-2 text-[10px] opacity-75">
+                        ({Math.round(percent)}%)
+                      </span>
+                    )}
+                  </span>
                 </div>
               </div>
-            ))}
-          </div>
-        </div>
-      )}
-
-      {/* Locked */}
-      {locked.length > 0 && (
-        <div>
-          <div className="flex items-center gap-2 mb-2">
-            <Lock size={14} className="text-slate-500" />
-            <span className="text-xs font-semibold text-slate-500">Locked</span>
-          </div>
-          <div className="space-y-2 ml-6">
-            {locked.map(ach => (
-              <div 
-                key={ach.id} 
-                className={`p-2 rounded bg-slate-900/50 border border-slate-800 opacity-60 ${onNavigateToAchievement ? 'cursor-pointer hover:opacity-80 transition-opacity' : ''}`}
-                onClick={() => onNavigateToAchievement?.(ach.id)}
-              >
-                <div className="flex items-center gap-2">
-                  <Lock size={12} className="text-slate-500 flex-shrink-0" />
-                  <span className="text-xs text-slate-500">{ach.name}</span>
-                </div>
-              </div>
-            ))}
-          </div>
-        </div>
-      )}
-
-      {/* Completed (if any) */}
-      {completed.length > 0 && (
-        <div>
-          <div className="flex items-center gap-2 mb-2">
-            <CheckCircle2 size={14} className="text-green-400" />
-            <span className="text-xs font-semibold text-green-400">Completed</span>
-          </div>
-          <div className="space-y-2 ml-6">
-            {completed.map(ach => (
-              <div 
-                key={ach.id} 
-                className={`p-2 rounded bg-green-900/20 border border-green-800/50 ${onNavigateToAchievement ? 'cursor-pointer hover:bg-green-900/30 transition-colors' : ''}`}
-                onClick={() => onNavigateToAchievement?.(ach.id)}
-              >
-                <div className="flex items-center gap-2">
-                  <CheckCircle2 size={14} className="text-green-400 flex-shrink-0" />
-                  <span className="text-xs text-green-300 line-through">{ach.name}</span>
-                </div>
-              </div>
-            ))}
-          </div>
-        </div>
-      )}
-
-      {/* Chain Flow Indicator */}
-      <div className="mt-3 pt-3 border-t border-slate-700">
-        <div className="flex items-center gap-2 text-xs text-slate-500">
-          <GitBranch size={12} />
-          <span>
-            Complete prerequisites in order to unlock: <span className="text-amber-400 font-semibold">{achievement.name}</span>
-          </span>
-        </div>
+            </div>
+          );
+        })}
       </div>
     </div>
   );
 };
 
-// Helper component for circle icon (since lucide-react doesn't have a simple Circle)
-const Circle = ({ size, className }: { size: number; className?: string }) => (
-  <div className={`rounded-full border-2 ${className || ''}`} style={{ width: size, height: size }} />
-);
 
-// Radar Chart Component for Playstyle Scores
+
+// Radar Chart Component for Playstyle Scores (aligned with recommendation flavors)
 const PlaystyleRadarChart = ({ scores }: { scores: Record<string, number> }) => {
   const size = 300;
   const center = size / 2;
   const radius = 120;
   
-  // Normalize scores to 0-100 scale
-  const maxScore = Math.max(...Object.values(scores), 1);
+  // Use flavor-based scores (Competitive, Endgame, Story, Collections, Meta)
+  // Explorer is excluded as it represents balanced/fallback
+  const flavorScores = {
+    Competitive: scores.Competitive || 0,
+    Endgame: scores.Endgame || 0,
+    Story: scores.Story || 0,
+    Collections: scores.Collections || 0,
+    Meta: scores.Meta || 0
+  };
+  const maxScore = Math.max(...Object.values(flavorScores), 1);
   const normalizedScores = {
-    Battlemaster: (scores.Battlemaster / maxScore) * 100,
-    Commander: (scores.Commander / maxScore) * 100,
-    Historian: (scores.Historian / maxScore) * 100,
-    Collector: (scores.Collector / maxScore) * 100,
-    Explorer: (scores.Explorer / maxScore) * 100
+    Competitive: (flavorScores.Competitive / maxScore) * 100,
+    Endgame: (flavorScores.Endgame / maxScore) * 100,
+    Story: (flavorScores.Story / maxScore) * 100,
+    Collections: (flavorScores.Collections / maxScore) * 100,
+    Meta: (flavorScores.Meta / maxScore) * 100
   };
   
-  // Order: Battlemaster (top), Commander (top-right), Collector (bottom-right), Explorer (bottom-left), Historian (top-left)
+  // Order: Competitive (top), Endgame (top-right), Collections (bottom-right), Story (bottom-left), Meta (top-left)
+  // 5 axes evenly spaced: 360° / 5 = 72° apart
+  // Starting from top (-90° or -π/2), going clockwise
   const axes = [
-    { name: 'Battlemaster', angle: -Math.PI / 2, icon: Crosshair }, // Top
-    { name: 'Commander', angle: Math.PI / 10, icon: Crown }, // Top-right
-    { name: 'Collector', angle: (3 * Math.PI) / 5, icon: Star }, // Bottom-right
-    { name: 'Explorer', angle: (7 * Math.PI) / 10, icon: Compass }, // Bottom-left
-    { name: 'Historian', angle: (-4 * Math.PI) / 5, icon: Scroll } // Top-left
+    { name: 'Competitive', angle: -Math.PI / 2, icon: Sword }, // Top: -90°
+    { name: 'Endgame', angle: -Math.PI / 2 + (2 * Math.PI / 5), icon: Trophy }, // Top-right: -90° + 72° = -18°
+    { name: 'Collections', angle: -Math.PI / 2 + (4 * Math.PI / 5), icon: Star }, // Bottom-right: -90° + 144° = 54°
+    { name: 'Story', angle: -Math.PI / 2 + (6 * Math.PI / 5), icon: Scroll }, // Bottom-left: -90° + 216° = 126°
+    { name: 'Meta', angle: -Math.PI / 2 + (8 * Math.PI / 5), icon: Crown } // Top-left: -90° + 288° = 198°
   ];
   
   // Calculate points for the polygon
@@ -1149,14 +1990,15 @@ const PlaystyleRadarChart = ({ scores }: { scores: Record<string, number> }) => 
       
       {/* Score breakdown */}
       <div className="grid grid-cols-2 md:grid-cols-5 gap-3 mt-4 w-full max-w-2xl">
-        {Object.entries(scores).map(([name, score]) => {
+        {axes.map((axis) => {
+          const score = flavorScores[axis.name as keyof typeof flavorScores];
           const normalized = (score / maxScore) * 100;
-          const Icon = axes.find(a => a.name === name)?.icon || Compass;
+          const Icon = axis.icon;
           return (
-            <div key={name} className="bg-slate-800/50 rounded-lg p-3 border border-slate-700">
+            <div key={axis.name} className="bg-slate-800/50 rounded-lg p-3 border border-slate-700">
               <div className="flex items-center gap-2 mb-1">
                 <Icon size={16} className="text-amber-500" />
-                <span className="text-xs font-semibold text-slate-300">{name}</span>
+                <span className="text-xs font-semibold text-slate-300">{axis.name}</span>
               </div>
               <div className="text-lg font-bold text-amber-400">{Math.round(score)}</div>
               <div className="text-[10px] text-slate-500">AP weighted</div>
@@ -1179,21 +2021,217 @@ const UserSettings = ({
   setApiKey, 
   onRefresh, 
   isRefreshing,
-  onClearApiKey
+  onClearApiKey,
+  achievementsCache,
+  userProgress,
+  starredAchievements,
+  onToggleStar,
+  onNavigateToAchievement,
+  achievementToCategoryMap,
+  onNeedAchievements,
+  advancedView,
+  setAdvancedView,
+  categories,
+  groups
 }: { 
   apiKey: string; 
   setApiKey: (key: string) => void; 
   onRefresh: () => void; 
   isRefreshing: boolean;
   onClearApiKey: () => void;
+  achievementsCache?: Record<number, Achievement>;
+  userProgress?: Record<number, UserProgress>;
+  starredAchievements?: Set<number>;
+  onToggleStar?: (id: number) => void;
+  onNavigateToAchievement?: (achievementId: number) => void;
+  achievementToCategoryMap?: Record<number, number>;
+  onNeedAchievements?: (ids: number[]) => void;
+  advancedView?: boolean;
+  setAdvancedView?: (value: boolean) => void;
+  categories?: Record<string, AchievementCategory[]>;
+  groups?: AchievementGroup[];
 }) => {
   const [isOpen, setIsOpen] = useState(false);
   const [tempKey, setTempKey] = useState(apiKey);
+  const [searchQuery, setSearchQuery] = useState('');
+  const [searchResults, setSearchResults] = useState<number[]>([]);
+  const [showSearchResults, setShowSearchResults] = useState(false);
+  const [hasSearched, setHasSearched] = useState(false); // Track if search has been performed
+  const [hasTyped, setHasTyped] = useState(false); // Track if user has typed in search (separate from hasSearched)
+  const [isSearchFocused, setIsSearchFocused] = useState(false); // Track if search input is focused
 
   const handleSave = () => {
     setApiKey(tempKey);
     setIsOpen(false);
   };
+
+  // Helper to get category icon for an achievement
+  const getCategoryIcon = (achievementId: number): string | null => {
+    if (!achievementToCategoryMap || !categories) return null;
+    const categoryId = achievementToCategoryMap[achievementId];
+    if (!categoryId) return null;
+    
+    // Search through all groups to find the category
+    for (const groupId in categories) {
+      const categoryList = categories[groupId];
+      const category = categoryList.find(cat => cat.id === categoryId);
+      if (category && category.icon) {
+        return category.icon;
+      }
+    }
+    return null;
+  };
+
+  // Search function
+  const performSearch = useCallback((query: string) => {
+    if (!query.trim()) {
+      setSearchResults([]);
+      setShowSearchResults(false);
+      setHasSearched(false);
+      setHasTyped(false);
+      return;
+    }
+    
+    // Mark that user has typed (even if cache isn't ready)
+    if (query.trim()) {
+      setHasTyped(true);
+    }
+
+    if (!achievementsCache || Object.keys(achievementsCache).length === 0) {
+      setSearchResults([]);
+      setShowSearchResults(false);
+      // Don't set hasSearched to false here - keep it true if user has typed
+      return;
+    }
+
+    setHasSearched(true); // Mark that we've actually performed a search with data
+
+    const lowerQuery = query.toLowerCase().trim();
+    const results: Array<{ id: number; score: number }> = [];
+
+    Object.values(achievementsCache).forEach(achievement => {
+      // Skip Daily/Weekly/Monthly achievements in search
+      if (shouldFilterAchievement(achievement)) {
+        return;
+      }
+
+      let score = 0;
+      let matched = false;
+
+      // Priority 1: Achievement name (exact match = highest score)
+      const nameLower = achievement.name.toLowerCase();
+      if (nameLower === lowerQuery) {
+        score += 1000;
+        matched = true;
+      } else if (nameLower.startsWith(lowerQuery)) {
+        score += 500;
+        matched = true;
+      } else if (nameLower.includes(lowerQuery)) {
+        score += 100;
+        matched = true;
+      }
+
+      // Priority 2: Description/requirement
+      const descLower = (achievement.description || '').toLowerCase();
+      const reqLower = (achievement.requirement || '').toLowerCase();
+      if (descLower.includes(lowerQuery)) {
+        score += 50;
+        matched = true;
+      }
+      if (reqLower.includes(lowerQuery)) {
+        score += 50;
+        matched = true;
+      }
+
+      // Priority 3: Item rewards
+      if (achievement.rewards) {
+        achievement.rewards.forEach(reward => {
+          if (reward.type === 'Item' && reward.item) {
+            const itemNameLower = reward.item.name.toLowerCase();
+            if (itemNameLower.includes(lowerQuery)) {
+              score += 75;
+              matched = true;
+            }
+            if (reward.item.type && reward.item.type.toLowerCase().includes(lowerQuery)) {
+              score += 25;
+              matched = true;
+            }
+          } else if (reward.type === 'Title' && reward.title) {
+            const titleNameLower = reward.title.name.toLowerCase();
+            if (titleNameLower.includes(lowerQuery)) {
+              score += 60;
+              matched = true;
+            }
+          } else if (reward.type === 'Mastery' && reward.region) {
+            const regionLower = reward.region.toLowerCase();
+            if (regionLower.includes(lowerQuery)) {
+              score += 40;
+              matched = true;
+            }
+          }
+        });
+      }
+
+      if (matched) {
+        results.push({ id: achievement.id, score });
+      }
+    });
+
+    // Sort by score (highest first) and limit to top 10
+    results.sort((a, b) => b.score - a.score);
+    const topResults = results.slice(0, 10).map(r => r.id);
+    
+    setSearchResults(topResults);
+    // Show results if:
+    // 1. There are results AND
+    // 2. (Input is focused OR user has typed something - meaning they want to see results)
+    // This allows results to show when cache loads even if input lost focus
+    setShowSearchResults(topResults.length > 0 && (isSearchFocused || hasTyped));
+
+    // Fetch missing achievement data if needed
+    if (onNeedAchievements && topResults.length > 0) {
+      const missingIds = topResults.filter(id => !achievementsCache[id]);
+      if (missingIds.length > 0) {
+        onNeedAchievements(missingIds);
+      }
+    }
+  }, [achievementsCache, onNeedAchievements, isSearchFocused, hasTyped]);
+
+  // Debounce search
+  useEffect(() => {
+    const timeoutId = setTimeout(() => {
+      performSearch(searchQuery);
+    }, 200);
+
+    return () => clearTimeout(timeoutId);
+  }, [searchQuery, performSearch]);
+
+  // Re-run search when achievementsCache is populated (if there's a query)
+  // This ensures search works even if cache wasn't ready when user typed
+  useEffect(() => {
+    if (searchQuery.trim() && achievementsCache && Object.keys(achievementsCache).length > 0 && hasTyped) {
+      // Re-run search when cache becomes available (if user has typed something)
+      const timeoutId = setTimeout(() => {
+        performSearch(searchQuery);
+      }, 100);
+      return () => clearTimeout(timeoutId);
+    }
+  }, [achievementsCache, searchQuery, performSearch, hasTyped]);
+
+  // Close search results when clicking outside
+  useEffect(() => {
+    const handleClickOutside = (event: MouseEvent) => {
+      const target = event.target as HTMLElement;
+      if (!target.closest('.search-container')) {
+        setShowSearchResults(false);
+      }
+    };
+
+    if (showSearchResults) {
+      document.addEventListener('mousedown', handleClickOutside);
+      return () => document.removeEventListener('mousedown', handleClickOutside);
+    }
+  }, [showSearchResults]);
 
   return (
     <div className="bg-slate-800 border-b border-slate-700 p-4 flex justify-between items-center sticky top-0 z-10 shadow-md">
@@ -1207,6 +2245,169 @@ const UserSettings = ({
           <div className="flex items-center gap-2 text-amber-400 bg-amber-900/20 px-3 py-1 rounded-full border border-amber-900/50">
             <AlertCircle size={16} />
             <span className="text-sm font-medium">No API Key</span>
+          </div>
+        )}
+      </div>
+
+      {/* Search Bar - Center */}
+      <div className="flex-1 max-w-2xl mx-4 relative search-container">
+        <div className="relative">
+          <Search className="absolute left-3 top-1/2 transform -translate-y-1/2 text-slate-400" size={18} />
+          <input
+            type="text"
+            value={searchQuery}
+            onChange={(e) => {
+              setSearchQuery(e.target.value);
+              // Only show results if there's a query and we have results
+              if (!e.target.value.trim()) {
+                setShowSearchResults(false);
+                setHasSearched(false);
+                setHasTyped(false);
+              } else {
+                setHasTyped(true); // Mark that user has typed
+              }
+            }}
+            onFocus={() => {
+              setIsSearchFocused(true);
+              // Show results on focus if we have a query and results exist
+              // This allows results to show when user focuses the input
+              if (searchQuery.trim() && searchResults.length > 0) {
+                setShowSearchResults(true);
+              }
+            }}
+            onBlur={() => {
+              setIsSearchFocused(false);
+              // Close results when input loses focus (with a small delay to allow clicks)
+              setTimeout(() => {
+                setShowSearchResults(false);
+              }, 200);
+            }}
+            placeholder="Search achievements, items, titles..."
+            className="w-full bg-slate-900 border border-slate-700 rounded-lg pl-10 pr-4 py-2 text-sm text-slate-200 placeholder-slate-500 focus:outline-none focus:border-amber-500"
+          />
+        </div>
+
+        {/* Search Results Dropdown */}
+        {showSearchResults && searchResults.length > 0 && (
+          <div className="absolute top-full left-0 right-0 mt-2 bg-slate-800 border border-slate-700 rounded-lg shadow-xl max-h-96 overflow-y-auto z-50">
+            <div className="p-2 space-y-1">
+              {searchResults.map(achievementId => {
+                const achievement = achievementsCache?.[achievementId];
+                if (!achievement) return null;
+                
+                const progress = userProgress?.[achievementId];
+                const isStarred = starredAchievements?.has(achievementId) || false;
+                const isDone = progress?.done || (progress?.repeated && progress.repeated > 0);
+
+                return (
+                  <div
+                    key={achievementId}
+                    onClick={() => {
+                      if (onNavigateToAchievement) {
+                        onNavigateToAchievement(achievementId);
+                        setShowSearchResults(false);
+                        setSearchQuery('');
+                        setHasSearched(false);
+                        setHasTyped(false);
+                      }
+                    }}
+                    className="p-3 rounded-lg bg-slate-900/50 border border-slate-700 hover:bg-slate-700/50 cursor-pointer transition-colors flex items-center justify-between gap-3"
+                  >
+                    <div className="flex items-center gap-3 flex-1 min-w-0">
+                      {/* Icon */}
+                      <div className={`w-10 h-10 rounded bg-slate-800 border border-slate-700 flex items-center justify-center overflow-hidden flex-shrink-0 ${isDone ? 'ring-2 ring-green-500/50' : ''}`}>
+                        {(achievement.icon || getCategoryIcon(achievementId)) ? (
+                          <img 
+                            src={achievement.icon || getCategoryIcon(achievementId) || ''} 
+                            alt={achievement.name} 
+                            className="w-full h-full object-cover"
+                          />
+                        ) : (
+                          <Trophy className="text-slate-600" size={20} />
+                        )}
+                      </div>
+
+                      {/* Content */}
+                      <div className="flex-1 min-w-0">
+                        <div className="flex items-center gap-2">
+                          <h4 className={`text-sm font-semibold truncate ${isDone ? 'text-green-400' : 'text-slate-200'}`}>
+                            {achievement.name}
+                          </h4>
+                          {isDone && (
+                            <CheckCircle2 size={14} className="text-green-400 flex-shrink-0" />
+                          )}
+                        </div>
+                        <p className="text-xs text-slate-400 line-clamp-1 mt-0.5">
+                          {achievement.requirement || achievement.description}
+                        </p>
+                        {/* Show matching context */}
+                        {achievement.rewards && achievement.rewards.some(r => 
+                          (r.type === 'Item' && r.item?.name.toLowerCase().includes(searchQuery.toLowerCase())) ||
+                          (r.type === 'Title' && r.title?.name.toLowerCase().includes(searchQuery.toLowerCase())) ||
+                          (r.type === 'Mastery' && r.region?.toLowerCase().includes(searchQuery.toLowerCase()))
+                        ) && (
+                          <div className="flex flex-wrap gap-1 mt-1">
+                            {achievement.rewards.map((reward, idx) => {
+                              if (reward.type === 'Item' && reward.item?.name.toLowerCase().includes(searchQuery.toLowerCase())) {
+                                return (
+                                  <span key={idx} className="text-[10px] text-amber-400 bg-amber-900/20 px-1.5 py-0.5 rounded">
+                                    {reward.item.name}
+                                  </span>
+                                );
+                              }
+                              if (reward.type === 'Title' && reward.title?.name.toLowerCase().includes(searchQuery.toLowerCase())) {
+                                return (
+                                  <span key={idx} className="text-[10px] text-purple-400 bg-purple-900/20 px-1.5 py-0.5 rounded">
+                                    {reward.title.name}
+                                  </span>
+                                );
+                              }
+                              if (reward.type === 'Mastery' && reward.region?.toLowerCase().includes(searchQuery.toLowerCase())) {
+                                return (
+                                  <span key={idx} className="text-[10px] text-yellow-400 bg-yellow-900/20 px-1.5 py-0.5 rounded">
+                                    {reward.region}
+                                  </span>
+                                );
+                              }
+                              return null;
+                            })}
+                          </div>
+                        )}
+                      </div>
+                    </div>
+
+                    {/* Star Button */}
+                    {onToggleStar && (
+                      <button
+                        onClick={(e) => {
+                          e.stopPropagation();
+                          onToggleStar(achievementId);
+                        }}
+                        className={`p-1.5 rounded transition-colors flex-shrink-0 ${
+                          isStarred 
+                            ? 'text-amber-400 hover:text-amber-300' 
+                            : 'text-slate-500 hover:text-amber-400'
+                        }`}
+                        title={isStarred ? 'Unstar achievement' : 'Star achievement'}
+                      >
+                        <Star size={18} className={isStarred ? 'fill-current' : ''} />
+                      </button>
+                    )}
+                  </div>
+                );
+              })}
+            </div>
+          </div>
+        )}
+
+        {/* No Results - Only show if we've actually performed a search */}
+        {showSearchResults && searchQuery.trim() && hasSearched && searchResults.length === 0 && (
+          <div className="absolute top-full left-0 right-0 mt-2 bg-slate-800 border border-slate-700 rounded-lg shadow-xl p-4 z-50">
+            <p className="text-sm text-slate-400 text-center">
+              {achievementsCache && Object.keys(achievementsCache).length === 0 
+                ? 'Loading achievements...' 
+                : 'No results found'}
+            </p>
           </div>
         )}
       </div>
@@ -1233,8 +2434,19 @@ const UserSettings = ({
       {isOpen && (
         <div className="absolute top-16 right-4 w-96 bg-slate-800 border border-slate-600 rounded-lg shadow-xl p-4 z-50">
           <h4 className="font-bold text-slate-200 mb-2">API Settings</h4>
-          <p className="text-xs text-slate-400 mb-4">
+          <p className="text-xs text-slate-400 mb-2">
             Enter your Guild Wars 2 API Key with <code>account</code> and <code>progression</code> scopes.
+          </p>
+          <p className="text-xs text-slate-400 mb-4">
+            Don't have an API key?{' '}
+            <a 
+              href="https://account.arena.net/applications/create" 
+              target="_blank" 
+              rel="noreferrer"
+              className="text-amber-400 hover:text-amber-300 underline"
+            >
+              Create one here
+            </a>
           </p>
           <div className="flex items-center gap-2 mb-4">
             <input
@@ -1257,6 +2469,38 @@ const UserSettings = ({
               </button>
             )}
           </div>
+
+          {/* Advanced View Toggle */}
+          {setAdvancedView !== undefined && (
+            <div className="mb-4 pb-4 border-b border-slate-700">
+              <label className="flex items-center justify-between cursor-pointer">
+                <div>
+                  <div className="text-sm font-medium text-slate-200 mb-1">Advanced View</div>
+                  <div className="text-xs text-slate-400">Show achievement IDs on cards</div>
+                </div>
+                <button
+                  onClick={() => {
+                    const newValue = !advancedView;
+                    setAdvancedView(newValue);
+                    try {
+                      localStorage.setItem('gw2_advanced_view', newValue.toString());
+                    } catch (e) {
+                      console.warn("Failed to save advanced view preference", e);
+                    }
+                  }}
+                  className={`relative inline-flex h-6 w-11 items-center rounded-full transition-colors ${
+                    advancedView ? 'bg-amber-600' : 'bg-slate-700'
+                  }`}
+                >
+                  <span
+                    className={`inline-block h-4 w-4 transform rounded-full bg-white transition-transform ${
+                      advancedView ? 'translate-x-6' : 'translate-x-1'
+                    }`}
+                  />
+                </button>
+              </label>
+            </div>
+          )}
 
           <div className="flex justify-end gap-2">
             <button 
@@ -1289,7 +2533,11 @@ const MyPath = ({
   isAchievementLocked,
   onClearStarred,
   onNavigateToAchievement,
-  achievementToCategoryMap
+  achievementToCategoryMap,
+  categories,
+  groups,
+  advancedView,
+  highlightedAchievementId
 }: {
   starredAchievements: Set<number>;
   achievementsCache: Record<number, Achievement>;
@@ -1302,6 +2550,10 @@ const MyPath = ({
   onClearStarred: () => void;
   onNavigateToAchievement?: (achievementId: number) => void;
   achievementToCategoryMap?: Record<number, number>;
+  categories?: Record<string, AchievementCategory[]>;
+  groups?: AchievementGroup[];
+  advancedView?: boolean;
+  highlightedAchievementId?: number | null;
 }) => {
   const starredIds = Array.from(starredAchievements);
 
@@ -1368,6 +2620,13 @@ const MyPath = ({
                 isAchievementLocked={isAchievementLocked}
                 onNavigateToAchievement={onNavigateToAchievement}
                 achievementToCategoryMap={achievementToCategoryMap}
+                starredAchievements={starredAchievements}
+                categories={categories}
+                unlocksMap={unlocksMap}
+                showBreadcrumbs={true}
+                groups={groups}
+                advancedView={advancedView}
+                highlightedAchievementId={highlightedAchievementId}
               />
             );
           })}
@@ -1400,7 +2659,10 @@ const Dashboard = ({
   unlocksMap,
   accountName,
   onNavigateToAchievement,
-  onShowPlaystyleChart
+  onShowPlaystyleChart,
+  apiKey,
+  advancedView,
+  highlightedAchievementId
 }: { 
   userProgress: Record<number, UserProgress>;
   achievementsCache: Record<number, Achievement>;
@@ -1417,6 +2679,9 @@ const Dashboard = ({
   accountName?: string;
   onNavigateToAchievement?: (achievementId: number) => void;
   onShowPlaystyleChart?: () => void;
+  apiKey: string;
+  advancedView?: boolean;
+  highlightedAchievementId?: number | null;
 }) => {
   const [flavor, setFlavor] = useState<string>('quickwins');
   const progressList = Object.values(userProgress);
@@ -1747,14 +3012,9 @@ const Dashboard = ({
     if (!achievement) return undefined;
 
     const reasons: string[] = [];
-    const totalPoints = achievement.tiers.reduce((acc, t) => acc + t.points, 0);
     
-    // High AP value
-    if (totalPoints >= 50) {
-      reasons.push(`High-value reward (${totalPoints} AP)`);
-    } else if (totalPoints >= 25) {
-      reasons.push(`Good reward (${totalPoints} AP)`);
-    }
+    // Removed AP value reasons - with tiered achievements, total AP is misleading
+    // since players may have already earned most AP from earlier tiers
 
     // Unlocks others
     const unlocks = unlocksMap[achievement.id];
@@ -2049,6 +3309,13 @@ const Dashboard = ({
                         isAchievementLocked={isAchievementLocked}
                         onNavigateToAchievement={onNavigateToAchievement}
                         achievementToCategoryMap={achievementToCategoryMap}
+                        starredAchievements={starredAchievements}
+                        categories={categories}
+                        unlocksMap={unlocksMap}
+                        showBreadcrumbs={true}
+                        groups={groups}
+                        advancedView={advancedView}
+                        highlightedAchievementId={highlightedAchievementId}
                       />
                     );
                   })}
@@ -2062,11 +3329,13 @@ const Dashboard = ({
               return (
                 <div className="bg-slate-800/50 border border-slate-700 rounded-lg p-6 text-center">
                   <p className="text-slate-400 mb-2">
-                    No recommendations found for this goal.
+                    {!apiKey ? 'An API key is required to get recommendations!' : 'No recommendations found for this goal.'}
                   </p>
-                  <p className="text-sm text-slate-500 italic">
-                    (Tip: Try a different goal or explore categories on the left!)
-                  </p>
+                  {apiKey && (
+                    <p className="text-sm text-slate-500 italic">
+                      (Tip: Try a different goal or explore categories on the left!)
+                    </p>
+                  )}
                 </div>
               );
             }
@@ -2100,11 +3369,20 @@ export default function GW2Pathfinder() {
     }
   });
   const [unlocksMap, setUnlocksMap] = useState<Record<number, number[]>>({});
+  const [advancedView, setAdvancedView] = useState<boolean>(() => {
+    // Load advanced view preference from localStorage
+    try {
+      return localStorage.getItem('gw2_advanced_view') === 'true';
+    } catch (e) {
+      return false;
+    }
+  });
   
   const [selectedGroup, setSelectedGroup] = useState<string | null>(null);
   const [selectedCategory, setSelectedCategory] = useState<number | null>(null);
   const [currentCategoryDetails, setCurrentCategoryDetails] = useState<AchievementCategory | null>(null);
   const [currentView, setCurrentView] = useState<'dashboard' | 'mypath' | 'category'>('dashboard');
+  const [highlightedAchievementId, setHighlightedAchievementId] = useState<number | null>(null);
   
   const [loadingGroups, setLoadingGroups] = useState(true);
   const [loadingCategory, setLoadingCategory] = useState(false);
@@ -2399,16 +3677,17 @@ export default function GW2Pathfinder() {
     return () => clearTimeout(t);
   }, [groups]);
 
-  // 6. Calculate Playstyle (Improved with AP weighting and better categorization)
+  // 6. Calculate Playstyle (Improved with AP weighting and flavor-based categorization)
   useEffect(() => {
       if (Object.keys(userProgress).length === 0 || Object.keys(achievementToCategoryMap).length === 0 || groups.length === 0) return;
 
       const scores = {
-          Battlemaster: 0,
-          Commander: 0,
-          Historian: 0,
-          Collector: 0,
-          Explorer: 0
+          Competitive: 0,
+          Endgame: 0,
+          Story: 0,
+          Collections: 0,
+          Meta: 0,
+          Explorer: 0 // Fallback for balanced/unmatched achievements
       };
 
       // Helper to find group for a category
@@ -2444,37 +3723,45 @@ export default function GW2Pathfinder() {
           
           const weightedScore = totalAP * progressWeight;
 
-          // Categorize based on Group Name and Achievement Type
+          // Categorize based on Group Name and Achievement Type (aligned with recommendation flavors)
           let categorized = false;
 
-          // Battlemaster: Competitive, PvP, WvW
+          // Competitive: PvP, WvW
           if (['Competitive', 'WvW', 'PvP', 'World vs. World'].some(s => groupName.includes(s))) {
-              scores.Battlemaster += weightedScore;
+              scores.Competitive += weightedScore;
               categorized = true;
           } 
-          // Commander: Endgame PvE content
+          // Endgame: Raids, Strikes, Fractals
           else if (['Fractals', 'Raids', 'Strike Missions', 'Strikes'].some(s => groupName.includes(s))) {
-              scores.Commander += weightedScore;
+              scores.Endgame += weightedScore;
               categorized = true;
           } 
-          // Historian: Story and Living World
+          // Story: Story and Living World
           else if (['Story', 'Side Stories', 'Living World', 'Heart of Thorns', 'Path of Fire', 'End of Dragons', 'Secrets of the Obscure', 'Janthir Wilds', 'Visions of Eternity'].some(s => groupName.includes(s))) {
-              scores.Historian += weightedScore;
+              scores.Story += weightedScore;
               categorized = true;
           } 
-          // Collector: Collections, Legendary, Fashion, or ItemSet type achievements
+          // Collections: Legendary, Fashion, Seasonal, or ItemSet type achievements
           else if (['Collections', 'Legendary', 'Fashion'].some(s => groupName.includes(s)) || 
                    achievement.type === 'ItemSet' ||
                    (achievement.name.toLowerCase().includes('collection') || 
                     achievement.name.toLowerCase().includes('legendary') ||
                     achievement.name.toLowerCase().includes('skin') ||
-                    achievement.name.toLowerCase().includes('wardrobe'))) {
-              scores.Collector += weightedScore;
+                    achievement.name.toLowerCase().includes('wardrobe') ||
+                    achievement.name.toLowerCase().includes('festival') ||
+                    achievement.name.toLowerCase().includes('halloween') ||
+                    achievement.name.toLowerCase().includes('wintersday'))) {
+              scores.Collections += weightedScore;
               categorized = true;
-          } 
-          // Explorer: Open world, exploration, general PvE (not story-specific)
+          }
+          // Meta: High-value achievements (CategoryDisplay flag)
+          else if (achievement.flags.includes('CategoryDisplay')) {
+              scores.Meta += weightedScore;
+              categorized = true;
+          }
+          // Explorer: Open world, exploration, general PvE (not story-specific), mastery
           else if (['General', 'Exploration', 'Open World', 'World Boss', 'Jumping Puzzle', 'Adventure', 'Mastery'].some(s => groupName.includes(s)) ||
-                   (!categorized && (groupName.includes('Tyria') || groupName.includes('Maguuma') || groupName.includes('Desert')))) {
+                   (groupName.includes('Tyria') || groupName.includes('Maguuma') || groupName.includes('Desert'))) {
               scores.Explorer += weightedScore;
               categorized = true;
           }
@@ -2485,39 +3772,50 @@ export default function GW2Pathfinder() {
           }
       });
 
-      // Find winner with tie-breaking
+      // Find winner with tie-breaking (map flavor scores to playstyle names for display)
       let winner = 'Explorer';
-      const scoreEntries = Object.entries(scores);
+      const scoreEntries = Object.entries(scores).filter(([name]) => name !== 'Explorer');
       
-      // Sort by score to handle ties (prefer more specific playstyles)
+      // Sort by score to handle ties (prefer more specific playstyles over Explorer)
       const sortedScores = scoreEntries.sort((a, b) => {
           if (b[1] !== a[1]) return b[1] - a[1]; // Sort by score first
-          // Tie-breaking: prefer more specific playstyles over Explorer
+          // Tie-breaking: prefer more specific flavors
           const priority: Record<string, number> = {
-              'Battlemaster': 4,
-              'Commander': 3,
-              'Historian': 2,
-              'Collector': 1,
+              'Meta': 5,
+              'Competitive': 4,
+              'Endgame': 3,
+              'Story': 2,
+              'Collections': 1,
               'Explorer': 0
           };
           return (priority[b[0]] || 0) - (priority[a[0]] || 0);
       });
       
+      // Map flavor to playstyle display name
+      const flavorToPlaystyle: Record<string, string> = {
+          'Competitive': 'Battlemaster',
+          'Endgame': 'Commander',
+          'Story': 'Historian',
+          'Collections': 'Collector',
+          'Meta': 'Collector', // Meta achievements often relate to collections
+          'Explorer': 'Explorer'
+      };
+      
       // Only assign a playstyle if there's a clear winner (at least 20% more than second place)
       // or if Explorer is the clear winner
       if (sortedScores.length >= 2) {
-          const [topStyle, topScore] = sortedScores[0];
+          const [topFlavor, topScore] = sortedScores[0];
           const [, secondScore] = sortedScores[1];
           
           // If top score is significantly higher, use it
-          if (topScore > secondScore * 1.2 || topScore > 0) {
-              winner = topStyle;
+          if (topScore > secondScore * 1.2 && topScore > 0) {
+              winner = flavorToPlaystyle[topFlavor] || 'Explorer';
           } else {
               // Very close scores = balanced player = Explorer
               winner = 'Explorer';
           }
-      } else if (sortedScores.length > 0) {
-          winner = sortedScores[0][0];
+      } else if (sortedScores.length > 0 && sortedScores[0][1] > 0) {
+          winner = flavorToPlaystyle[sortedScores[0][0]] || 'Explorer';
       }
       
       setPlaystyle(winner);
@@ -2705,6 +4003,8 @@ export default function GW2Pathfinder() {
       } else {
         // Starring - add the achievement and its uncompleted prerequisites in order
         const achievement = achievements[id];
+        
+        // Add uncompleted prerequisites
         if (achievement && achievement.prerequisites && achievement.prerequisites.length > 0) {
           // Get prerequisites in topological order (dependencies first)
           const prerequisitesInOrder = getPrerequisitesInOrder(id, achievements, userProgress);
@@ -2718,6 +4018,7 @@ export default function GW2Pathfinder() {
             }
           });
         }
+        
         // Add the achievement itself
         newSet.add(id);
       }
@@ -2729,7 +4030,7 @@ export default function GW2Pathfinder() {
       }
       return newSet;
     });
-  }, [achievements, userProgress, getPrerequisitesInOrder]);
+  }, [achievements, userProgress, getPrerequisitesInOrder, achievementToCategoryMap, categories]);
 
   const handleGoHome = () => {
     setSelectedCategory(null);
@@ -2748,20 +4049,44 @@ export default function GW2Pathfinder() {
     setCurrentView('category');
   };
 
-  // Navigate to an achievement by finding its category
+  // Navigate to an achievement by finding its category and group
   const handleNavigateToAchievement = useCallback((achievementId: number) => {
     const categoryId = achievementToCategoryMap[achievementId];
     if (categoryId) {
-      handleSelectCategory(categoryId);
+      // Find which group contains this category
+      let groupId: string | null = null;
+      for (const group of groups) {
+        if (group.categories.includes(categoryId)) {
+          groupId = group.id;
+          break;
+        }
+      }
+      
+      // Set the selected group and category to update the sidebar
+      if (groupId) {
+        setSelectedGroup(groupId);
+      }
+      setSelectedCategory(categoryId);
+      setCurrentView('category');
+      
       // Scroll to the achievement after a short delay to allow rendering
       setTimeout(() => {
         const element = document.getElementById(`achievement-${achievementId}`);
         if (element) {
           element.scrollIntoView({ behavior: 'smooth', block: 'center' });
+          // Trigger fade-blink animation after scroll completes
+          // Wait a bit longer to ensure scroll is done
+          setTimeout(() => {
+            setHighlightedAchievementId(achievementId);
+            // Clear after animation completes (2 blinks = ~1.2s)
+            setTimeout(() => {
+              setHighlightedAchievementId(null);
+            }, 1200);
+          }, 300);
         }
       }, 100);
     }
-  }, [achievementToCategoryMap]);
+  }, [achievementToCategoryMap, groups]);
 
   const renderContent = () => {
     if (currentView === 'mypath') {
@@ -2778,6 +4103,10 @@ export default function GW2Pathfinder() {
           onClearStarred={handleClearStarred}
           onNavigateToAchievement={handleNavigateToAchievement}
           achievementToCategoryMap={achievementToCategoryMap}
+          categories={categories}
+          groups={groups}
+          advancedView={advancedView}
+          highlightedAchievementId={highlightedAchievementId}
         />
       );
     }
@@ -2800,6 +4129,9 @@ export default function GW2Pathfinder() {
           accountName={accountName}
           onNavigateToAchievement={handleNavigateToAchievement}
           onShowPlaystyleChart={() => setShowPlaystyleChart(true)}
+          apiKey={apiKey}
+          advancedView={advancedView}
+          highlightedAchievementId={highlightedAchievementId}
         />
       );
     }
@@ -2822,6 +4154,9 @@ export default function GW2Pathfinder() {
           accountName={accountName}
           onNavigateToAchievement={handleNavigateToAchievement}
           onShowPlaystyleChart={() => setShowPlaystyleChart(true)}
+          apiKey={apiKey}
+          advancedView={advancedView}
+          highlightedAchievementId={highlightedAchievementId}
         />
       );
     }
@@ -2885,6 +4220,11 @@ export default function GW2Pathfinder() {
                   isAchievementLocked={isAchievementLocked}
                   onNavigateToAchievement={handleNavigateToAchievement}
                   achievementToCategoryMap={achievementToCategoryMap}
+                  starredAchievements={starredAchievements}
+                  categories={categories}
+                  unlocksMap={unlocksMap}
+                  advancedView={advancedView}
+                  highlightedAchievementId={highlightedAchievementId}
                 />
               </div>
             );
@@ -2919,6 +4259,17 @@ export default function GW2Pathfinder() {
           onRefresh={syncUserProgress}
           isRefreshing={refreshingProgress}
           onClearApiKey={handleClearApiKey}
+          achievementsCache={achievements}
+          userProgress={userProgress}
+          starredAchievements={starredAchievements}
+          onToggleStar={handleToggleStar}
+          onNavigateToAchievement={handleNavigateToAchievement}
+          achievementToCategoryMap={achievementToCategoryMap}
+          onNeedAchievements={fetchSpecificAchievements}
+          advancedView={advancedView}
+          setAdvancedView={setAdvancedView}
+          categories={categories}
+          groups={groups}
         />
         
         <main className="flex-1 overflow-y-auto scrollbar-thin scrollbar-thumb-slate-700 scrollbar-track-slate-900">

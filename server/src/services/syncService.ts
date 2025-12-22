@@ -42,20 +42,29 @@ export async function syncAllData(): Promise<void> {
     const allAchievementIds = categories.flatMap(c => c.achievements);
     const uniqueAchievementIds = Array.from(new Set(allAchievementIds));
 
-    // 6. Sync Achievements
+    // 6. Sync Achievements (filter out Daily/Weekly/Monthly)
     console.log('Fetching achievements...');
     const achievements = await fetchAchievements(uniqueAchievementIds);
-    await syncAchievements(achievements, categories);
-    console.log(`Synced ${achievements.length} achievements`);
+    // Filter out Daily/Weekly/Monthly achievements before syncing
+    const filterFlags = ['Daily', 'Weekly', 'Monthly'];
+    const filteredAchievements = achievements.filter(ach => {
+      return !filterFlags.some(flag => (ach.flags || []).includes(flag));
+    });
+    // Create a set of valid achievement IDs for relationship syncing
+    const validAchievementIds = new Set(filteredAchievements.map(ach => ach.id));
+    
+    await syncAchievements(filteredAchievements, categories);
+    console.log(`Synced ${filteredAchievements.length} achievements (filtered ${achievements.length - filteredAchievements.length} Daily/Weekly/Monthly)`);
 
     // 7. Now sync category-achievement relationships (after achievements exist)
+    // Filter out Daily/Weekly/Monthly achievement IDs from categories
     console.log('Syncing category-achievement relationships...');
-    await syncCategoryAchievementRelationships(categories);
+    await syncCategoryAchievementRelationships(categories, validAchievementIds);
     console.log('Category-achievement relationships synced');
 
-    // 8. Extract item IDs from achievement rewards and sync items
+    // 8. Extract item IDs from achievement rewards and sync items (use filtered achievements)
     console.log('Extracting item IDs from achievement rewards...');
-    const itemIds = extractItemIdsFromAchievements(achievements);
+    const itemIds = extractItemIdsFromAchievements(filteredAchievements);
     if (itemIds.length > 0) {
       console.log(`Found ${itemIds.length} unique item IDs in achievement rewards`);
       console.log('Fetching item data...');
@@ -66,9 +75,9 @@ export async function syncAllData(): Promise<void> {
       console.log('No items found in achievement rewards');
     }
 
-    // 9. Extract title IDs from achievement rewards and sync titles
+    // 9. Extract title IDs from achievement rewards and sync titles (use filtered achievements)
     console.log('Extracting title IDs from achievement rewards...');
-    const titleIds = extractTitleIdsFromAchievements(achievements);
+    const titleIds = extractTitleIdsFromAchievements(filteredAchievements);
     if (titleIds.length > 0) {
       console.log(`Found ${titleIds.length} unique title IDs in achievement rewards`);
       console.log('Fetching title data...');
@@ -78,6 +87,11 @@ export async function syncAllData(): Promise<void> {
     } else {
       console.log('No titles found in achievement rewards');
     }
+
+    // 10. Clean up any existing Daily/Weekly/Monthly achievements from database
+    console.log('Cleaning up Daily/Weekly/Monthly achievements from database...');
+    await cleanupFilteredAchievements();
+    console.log('Cleanup completed');
 
     const endTime = Date.now();
     const duration = ((endTime - startTime) / 1000).toFixed(2);
@@ -214,7 +228,10 @@ async function syncCategories(
   }
 }
 
-async function syncCategoryAchievementRelationships(categories: AchievementCategory[]): Promise<void> {
+async function syncCategoryAchievementRelationships(
+  categories: AchievementCategory[],
+  validAchievementIds: Set<number>
+): Promise<void> {
   const client = await pool.connect();
   try {
     await client.query('BEGIN');
@@ -223,14 +240,19 @@ async function syncCategoryAchievementRelationships(categories: AchievementCateg
       // Clear existing achievement associations
       await client.query('DELETE FROM category_achievements WHERE category_id = $1', [category.id]);
 
-      // Insert new achievement associations (batch insert)
+      // Filter out Daily/Weekly/Monthly achievements before inserting
+      // Only include achievement IDs that exist in the valid set (were synced to DB)
       if (category.achievements && category.achievements.length > 0) {
-        await client.query(
-          `INSERT INTO category_achievements (category_id, achievement_id)
-           SELECT $1, unnest($2::integer[])
-           ON CONFLICT DO NOTHING`,
-          [category.id, category.achievements]
-        );
+        const validIds = category.achievements.filter(id => validAchievementIds.has(id));
+        
+        if (validIds.length > 0) {
+          await client.query(
+            `INSERT INTO category_achievements (category_id, achievement_id)
+             SELECT $1, unnest($2::integer[])
+             ON CONFLICT DO NOTHING`,
+            [category.id, validIds]
+          );
+        }
       }
     }
 
@@ -388,6 +410,36 @@ async function syncTitles(titles: Title[]): Promise<void> {
     }
 
     await client.query('COMMIT');
+  } catch (error) {
+    await client.query('ROLLBACK');
+    throw error;
+  } finally {
+    client.release();
+  }
+}
+
+// Clean up Daily/Weekly/Monthly achievements from database
+async function cleanupFilteredAchievements(): Promise<void> {
+  const client = await pool.connect();
+  try {
+    await client.query('BEGIN');
+
+    // Delete achievements with Daily, Weekly, or Monthly flags
+    const filterFlags = ['Daily', 'Weekly', 'Monthly'];
+    const result = await client.query(
+      `DELETE FROM achievements WHERE flags && $1::text[]`,
+      [filterFlags]
+    );
+
+    // Also clean up any orphaned category-achievement relationships
+    // (achievements that were deleted but relationships remain)
+    await client.query(
+      `DELETE FROM category_achievements 
+       WHERE achievement_id NOT IN (SELECT id FROM achievements)`
+    );
+
+    await client.query('COMMIT');
+    console.log(`Deleted ${result.rowCount} Daily/Weekly/Monthly achievements from database`);
   } catch (error) {
     await client.query('ROLLBACK');
     throw error;
