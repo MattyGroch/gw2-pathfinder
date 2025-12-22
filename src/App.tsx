@@ -27,7 +27,8 @@ import {
   Gem,
   Calendar,
   X,
-  Search
+  Search,
+  GripVertical
 } from 'lucide-react';
 
 // --- Types ---
@@ -825,7 +826,7 @@ const AchievementCard = ({
   isAchievementLocked?: (achievement: Achievement) => boolean;
   onNavigateToAchievement?: (achievementId: number) => void;
   achievementToCategoryMap?: Record<number, number>;
-  starredAchievements?: Set<number>;
+  starredAchievements?: number[];
   categories?: Record<string, AchievementCategory[]>;
   unlocksMap?: Record<number, number[]>;
   showBreadcrumbs?: boolean;
@@ -2058,7 +2059,7 @@ const UserSettings = ({
   onClearApiKey: () => void;
   achievementsCache?: Record<number, Achievement>;
   userProgress?: Record<number, UserProgress>;
-  starredAchievements?: Set<number>;
+  starredAchievements?: number[];
   onToggleStar?: (id: number) => void;
   onNavigateToAchievement?: (achievementId: number) => void;
   achievementToCategoryMap?: Record<number, number>;
@@ -2313,7 +2314,7 @@ const UserSettings = ({
                 if (!achievement) return null;
                 
                 const progress = userProgress?.[achievementId];
-                const isStarred = starredAchievements?.has(achievementId) || false;
+                const isStarred = starredAchievements?.includes(achievementId) || false;
                 const isDone = progress?.done || (progress?.repeated && progress.repeated > 0);
 
                 return (
@@ -2554,9 +2555,10 @@ const MyPath = ({
   categories,
   groups,
   advancedView,
-  highlightedAchievementId
+  highlightedAchievementId,
+  onReorderAchievements
 }: {
-  starredAchievements: Set<number>;
+  starredAchievements: number[];
   achievementsCache: Record<number, Achievement>;
   userProgress: Record<number, UserProgress>;
   onNeedAchievements: (ids: number[]) => void;
@@ -2571,18 +2573,20 @@ const MyPath = ({
   groups?: AchievementGroup[];
   advancedView?: boolean;
   highlightedAchievementId?: number | null;
+  onReorderAchievements?: (newOrder: number[]) => void;
 }) => {
-  const starredIds = Array.from(starredAchievements);
+  const [draggedId, setDraggedId] = useState<number | null>(null);
+  const [dragOverId, setDragOverId] = useState<number | null>(null);
 
   // Fetch missing achievements
   useEffect(() => {
-    const missingIds = starredIds.filter(id => !achievementsCache[id]);
+    const missingIds = starredAchievements.filter(id => !achievementsCache[id]);
     if (missingIds.length > 0) {
       onNeedAchievements(missingIds);
     }
-  }, [starredIds, achievementsCache, onNeedAchievements]);
+  }, [starredAchievements, achievementsCache, onNeedAchievements]);
 
-  const achievements = starredIds
+  const achievements = starredAchievements
     .reduce<Array<{ achievement: Achievement; progress?: UserProgress }>>((acc, id) => {
       const ach = achievementsCache[id];
       if (ach) {
@@ -2590,6 +2594,61 @@ const MyPath = ({
       }
       return acc;
     }, []);
+
+  const handleDragStart = (e: React.DragEvent, achievementId: number) => {
+    setDraggedId(achievementId);
+    e.dataTransfer.effectAllowed = 'move';
+    // Add a slight opacity to the dragged element
+    if (e.currentTarget instanceof HTMLElement) {
+      e.currentTarget.style.opacity = '0.5';
+    }
+  };
+
+  const handleDragEnd = (e: React.DragEvent) => {
+    setDraggedId(null);
+    setDragOverId(null);
+    // Reset opacity
+    if (e.currentTarget instanceof HTMLElement) {
+      e.currentTarget.style.opacity = '1';
+    }
+  };
+
+  const handleDragOver = (e: React.DragEvent, achievementId: number) => {
+    e.preventDefault();
+    e.dataTransfer.dropEffect = 'move';
+    if (draggedId !== null && draggedId !== achievementId) {
+      setDragOverId(achievementId);
+    }
+  };
+
+  const handleDragLeave = () => {
+    setDragOverId(null);
+  };
+
+  const handleDrop = (e: React.DragEvent, dropTargetId: number) => {
+    e.preventDefault();
+    setDragOverId(null);
+
+    if (draggedId === null || draggedId === dropTargetId || !onReorderAchievements) {
+      return;
+    }
+
+    const currentOrder = [...starredAchievements];
+    const draggedIndex = currentOrder.indexOf(draggedId);
+    const dropIndex = currentOrder.indexOf(dropTargetId);
+
+    if (draggedIndex === -1 || dropIndex === -1) {
+      return;
+    }
+
+    // Remove dragged item from its current position
+    currentOrder.splice(draggedIndex, 1);
+    // Insert it at the new position
+    currentOrder.splice(dropIndex, 0, draggedId);
+
+    onReorderAchievements(currentOrder);
+    setDraggedId(null);
+  };
 
   return (
     <div className="p-6 max-w-5xl mx-auto">
@@ -2599,7 +2658,7 @@ const MyPath = ({
             <Route className="text-amber-500" size={32} />
             My Path
           </h2>
-          {starredAchievements.size > 0 && (
+          {starredAchievements.length > 0 && (
             <button
               onClick={() => {
                 if (window.confirm('Are you sure you want to clear all starred achievements?')) {
@@ -2614,37 +2673,66 @@ const MyPath = ({
             </button>
           )}
         </div>
-        <p className="text-slate-400">Your starred achievements - your personal journey.</p>
+        <p className="text-slate-400">Your starred achievements - your personal journey. Drag and drop to reorder.</p>
       </div>
 
       {achievements.length > 0 ? (
-        <div className="space-y-4">
-          {achievements.map(item => {
+        <div className="space-y-4 pl-10">
+          {achievements.map((item, index) => {
             const unlocks = unlocksMap[item.achievement.id] || [];
+            const isDragging = draggedId === item.achievement.id;
+            const isDragOver = dragOverId === item.achievement.id;
+            
             return (
-              <AchievementCard
+              <div
                 key={item.achievement.id}
-                achievement={item.achievement}
-                progress={item.progress}
-                isStarred={true}
-                onToggleStar={onToggleStar}
-                isLocked={isAchievementLocked(item.achievement)}
-                unlocksCount={unlocks.length}
-                achievementsCache={achievementsCache}
-                userProgress={userProgress}
-                onNeedAchievements={onNeedAchievements}
-                accountAccess={accountAccess}
-                isAchievementLocked={isAchievementLocked}
-                onNavigateToAchievement={onNavigateToAchievement}
-                achievementToCategoryMap={achievementToCategoryMap}
-                starredAchievements={starredAchievements}
-                categories={categories}
-                unlocksMap={unlocksMap}
-                showBreadcrumbs={true}
-                groups={groups}
-                advancedView={advancedView}
-                highlightedAchievementId={highlightedAchievementId}
-              />
+                draggable
+                onDragStart={(e) => handleDragStart(e, item.achievement.id)}
+                onDragEnd={handleDragEnd}
+                onDragOver={(e) => handleDragOver(e, item.achievement.id)}
+                onDragLeave={handleDragLeave}
+                onDrop={(e) => handleDrop(e, item.achievement.id)}
+                className={`relative transition-all group ${
+                  isDragging ? 'opacity-50 cursor-grabbing' : 'cursor-grab'
+                } ${
+                  isDragOver && draggedId !== item.achievement.id ? 'translate-y-2' : ''
+                }`}
+              >
+                {/* Drop Indicator */}
+                {isDragOver && draggedId !== item.achievement.id && (
+                  <div className="absolute -top-2 left-0 right-0 h-0.5 bg-amber-500 rounded-full z-10" />
+                )}
+                
+                <div className="relative">
+                  {/* Drag Handle - visible on hover, centered vertically, positioned to the left */}
+                  <div className="absolute -left-8 top-1/2 -translate-y-1/2 z-10 flex items-center justify-center text-slate-600 group-hover:text-slate-400 transition-colors pointer-events-none">
+                    <GripVertical size={24} />
+                  </div>
+                  
+                  <AchievementCard
+                    achievement={item.achievement}
+                    progress={item.progress}
+                    isStarred={true}
+                    onToggleStar={onToggleStar}
+                    isLocked={isAchievementLocked(item.achievement)}
+                    unlocksCount={unlocks.length}
+                    achievementsCache={achievementsCache}
+                    userProgress={userProgress}
+                    onNeedAchievements={onNeedAchievements}
+                    accountAccess={accountAccess}
+                    isAchievementLocked={isAchievementLocked}
+                    onNavigateToAchievement={onNavigateToAchievement}
+                    achievementToCategoryMap={achievementToCategoryMap}
+                    starredAchievements={starredAchievements}
+                    categories={categories}
+                    unlocksMap={unlocksMap}
+                    showBreadcrumbs={true}
+                    groups={groups}
+                    advancedView={advancedView}
+                    highlightedAchievementId={highlightedAchievementId}
+                  />
+                </div>
+              </div>
             );
           })}
         </div>
@@ -2689,7 +2777,7 @@ const Dashboard = ({
   achievementToCategoryMap: Record<number, number>;
   groups: AchievementGroup[];
   onToggleStar: (id: number) => void;
-  starredAchievements: Set<number>;
+  starredAchievements: number[];
   accountAccess: string[];
   categories: Record<string, AchievementCategory[]>;
   unlocksMap: Record<number, number[]>;
@@ -3314,7 +3402,7 @@ const Dashboard = ({
                         key={p.id} 
                         achievement={ach} 
                         progress={p}
-                        isStarred={starredAchievements.has(p.id)}
+                        isStarred={starredAchievements.includes(p.id)}
                         onToggleStar={onToggleStar}
                         isLocked={isAchievementLocked(ach)}
                         unlocksCount={unlocks.length}
@@ -3417,17 +3505,17 @@ export default function GW2Pathfinder() {
   const [showPlaystyleChart, setShowPlaystyleChart] = useState(false);
   const [achievementToCategoryMap, setAchievementToCategoryMap] = useState<Record<number, number>>({});
   
-  // Starred Achievements
-  const [starredAchievements, setStarredAchievements] = useState<Set<number>>(() => {
+  // Starred Achievements (ordered array for drag-and-drop reordering)
+  const [starredAchievements, setStarredAchievements] = useState<number[]>(() => {
     try {
       const stored = localStorage.getItem('gw2_starred_achievements');
       if (stored) {
-        return new Set(JSON.parse(stored));
+        return JSON.parse(stored);
       }
     } catch (e) {
       console.warn("Failed to load starred achievements", e);
     }
-    return new Set<number>();
+    return [];
   });
   
 
@@ -3968,8 +4056,17 @@ export default function GW2Pathfinder() {
   }, []);
 
   const handleClearStarred = useCallback(() => {
-    setStarredAchievements(new Set<number>());
+    setStarredAchievements([]);
     localStorage.removeItem('gw2_starred_achievements');
+  }, []);
+
+  const handleReorderAchievements = useCallback((newOrder: number[]) => {
+    setStarredAchievements(newOrder);
+    try {
+      localStorage.setItem('gw2_starred_achievements', JSON.stringify(newOrder));
+    } catch (e) {
+      console.warn("Failed to save reordered achievements", e);
+    }
   }, []);
 
   // Helper function to get all prerequisites recursively and sort them topologically
@@ -4013,39 +4110,42 @@ export default function GW2Pathfinder() {
 
   const handleToggleStar = useCallback((id: number) => {
     setStarredAchievements(prev => {
-      const newSet = new Set(prev);
-      if (newSet.has(id)) {
-        // Unstarring - just remove it
-        newSet.delete(id);
+      const newArray = [...prev];
+      const index = newArray.indexOf(id);
+      
+      if (index !== -1) {
+        // Unstarring - remove it
+        newArray.splice(index, 1);
       } else {
         // Starring - add the achievement and its uncompleted prerequisites in order
         const achievement = achievements[id];
         
-        // Add uncompleted prerequisites
+        // Add uncompleted prerequisites first
         if (achievement && achievement.prerequisites && achievement.prerequisites.length > 0) {
           // Get prerequisites in topological order (dependencies first)
           const prerequisitesInOrder = getPrerequisitesInOrder(id, achievements, userProgress);
           
-          // Filter to only uncompleted prerequisites and add them
+          // Filter to only uncompleted prerequisites and add them (avoiding duplicates)
           prerequisitesInOrder.forEach(prereqId => {
             const prereqProg = userProgress[prereqId];
             const isCompleted = prereqProg && (prereqProg.done || (prereqProg.repeated && prereqProg.repeated > 0));
-            if (!isCompleted && achievements[prereqId]) {
-              newSet.add(prereqId);
+            if (!isCompleted && achievements[prereqId] && !newArray.includes(prereqId)) {
+              newArray.push(prereqId);
             }
           });
         }
         
-        // Add the achievement itself
-        newSet.add(id);
+        // Add the achievement itself at the end
+        newArray.push(id);
       }
+      
       // Persist to localStorage
       try {
-        localStorage.setItem('gw2_starred_achievements', JSON.stringify(Array.from(newSet)));
+        localStorage.setItem('gw2_starred_achievements', JSON.stringify(newArray));
       } catch (e) {
         console.warn("Failed to save starred achievements", e);
       }
-      return newSet;
+      return newArray;
     });
   }, [achievements, userProgress, getPrerequisitesInOrder, achievementToCategoryMap, categories]);
 
@@ -4124,6 +4224,7 @@ export default function GW2Pathfinder() {
           groups={groups}
           advancedView={advancedView}
           highlightedAchievementId={highlightedAchievementId}
+          onReorderAchievements={handleReorderAchievements}
         />
       );
     }
@@ -4226,7 +4327,7 @@ export default function GW2Pathfinder() {
                 <AchievementCard 
                   achievement={ach} 
                   progress={userProgress[id]}
-                  isStarred={starredAchievements.has(id)}
+                  isStarred={starredAchievements.includes(id)}
                   onToggleStar={handleToggleStar}
                   isLocked={isAchievementLocked(ach)}
                   unlocksCount={unlocks.length}
