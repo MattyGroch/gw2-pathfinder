@@ -2,6 +2,26 @@
 @tailwind components;
 @tailwind utilities;
 
+@layer base {
+  .font-gw2-title {
+    font-family: 'Cinzel Decorative', serif;
+    font-weight: 700;
+    letter-spacing: 0.05em;
+  }
+  
+  .font-gw2-header {
+    font-family: 'Cinzel', serif;
+    font-weight: 600;
+    letter-spacing: 0.03em;
+  }
+  
+  .font-gw2-subheader {
+    font-family: 'Cinzel', serif;
+    font-weight: 500;
+    letter-spacing: 0.02em;
+  }
+}
+
 @keyframes fade-blink {
   0%, 100% {
     opacity: 1;

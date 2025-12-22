@@ -672,9 +672,26 @@ const Sidebar = ({
 
   return (
     <div className="w-full md:w-64 bg-slate-900 border-r border-slate-700 flex-shrink-0 flex flex-col h-screen overflow-hidden">
-      <div className="p-4 border-b border-slate-700 flex items-center gap-2 cursor-pointer hover:bg-slate-800 transition-colors" onClick={onGoHome}>
-        <Compass className="text-amber-500" size={24} />
-        <h1 className="text-xl font-bold text-slate-100 tracking-tight">GW2 Pathfinder</h1>
+      <div className="min-h-16 p-4 border-b border-slate-700 flex items-center justify-center cursor-pointer hover:bg-slate-800 transition-colors" onClick={onGoHome}>
+        <img 
+          src="/logo.svg" 
+          alt="GW2 Pathfinder" 
+          className="h-12 w-auto max-w-full" 
+          onError={(e) => {
+            console.error('Logo failed to load from /logo.svg');
+            // Fallback: show text if logo fails
+            const target = e.target as HTMLImageElement;
+            if (target && target.parentElement) {
+              target.style.display = 'none';
+              if (!target.parentElement.querySelector('.logo-fallback')) {
+                const fallback = document.createElement('div');
+                fallback.className = 'logo-fallback text-xl font-gw2-title text-amber-500';
+                fallback.textContent = 'GW2 Pathfinder';
+                target.parentElement.appendChild(fallback);
+              }
+            }
+          }}
+        />
       </div>
       
       <div className="flex-1 overflow-y-auto scrollbar-thin scrollbar-thumb-slate-600">
@@ -961,7 +978,7 @@ const AchievementCard = ({
                 }
                 return null;
               })()}
-              <h3 className={`font-bold text-lg leading-tight ${isDone ? 'text-green-400' : isLocked ? 'text-slate-500' : 'text-slate-100'}`}>
+              <h3 className={`font-gw2-subheader text-lg leading-tight ${isDone ? 'text-green-400' : isLocked ? 'text-slate-500' : 'text-slate-100'}`}>
                 {achievement.name}
                 {advancedView && (
                   <span className="ml-2 text-xs bg-slate-700/50 text-slate-400 px-1.5 py-0.5 rounded font-mono">
@@ -2234,7 +2251,7 @@ const UserSettings = ({
   }, [showSearchResults]);
 
   return (
-    <div className="bg-slate-800 border-b border-slate-700 p-4 flex justify-between items-center sticky top-0 z-10 shadow-md">
+    <div className="bg-slate-800 border-b border-slate-700 p-4 flex justify-between items-center sticky top-0 z-10 shadow-md h-16">
       <div className="flex items-center gap-3">
         {apiKey ? (
           <div className="flex items-center gap-2 text-green-400 bg-green-900/20 px-3 py-1 rounded-full border border-green-900/50">
@@ -2433,7 +2450,7 @@ const UserSettings = ({
 
       {isOpen && (
         <div className="absolute top-16 right-4 w-96 bg-slate-800 border border-slate-600 rounded-lg shadow-xl p-4 z-50">
-          <h4 className="font-bold text-slate-200 mb-2">API Settings</h4>
+          <h4 className="font-gw2-subheader text-slate-200 mb-2">API Settings</h4>
           <p className="text-xs text-slate-400 mb-2">
             Enter your Guild Wars 2 API Key with <code>account</code> and <code>progression</code> scopes.
           </p>
@@ -2578,7 +2595,7 @@ const MyPath = ({
     <div className="p-6 max-w-5xl mx-auto">
       <div className="mb-8">
         <div className="flex items-center justify-between mb-2">
-          <h2 className="text-3xl font-bold text-slate-100 flex items-center gap-3">
+          <h2 className="text-3xl font-gw2-header text-slate-100 flex items-center gap-3">
             <Route className="text-amber-500" size={32} />
             My Path
           </h2>
@@ -3072,7 +3089,7 @@ const Dashboard = ({
   return (
     <div className="p-6 max-w-5xl mx-auto">
       <div className="mb-8 text-center">
-        <h2 className="text-3xl font-bold text-slate-100 mb-2">Welcome, {accountName ? accountName.replace(/\.\d+$/, '') : 'Pathfinder'}</h2>
+        <h2 className="text-3xl font-gw2-header text-slate-100 mb-2">Welcome, {accountName ? accountName.replace(/\.\d+$/, '') : 'Pathfinder'}</h2>
         <p className="text-slate-400">Track your Guild Wars 2 journey and find your next adventure.</p>
       </div>
 
@@ -3082,7 +3099,7 @@ const Dashboard = ({
             <CheckCircle2 size={24} />
           </div>
           <div>
-            <div className="text-2xl font-bold text-slate-100">{totalCompleted}</div>
+            <div className="text-2xl font-gw2-header text-slate-100">{totalCompleted}</div>
             <div className="text-xs text-slate-400 uppercase font-semibold">Completed Achievements</div>
           </div>
         </div>
@@ -3091,7 +3108,7 @@ const Dashboard = ({
             <Trophy size={24} />
           </div>
           <div>
-            <div className="text-2xl font-bold text-slate-100">{progressList.length}</div>
+            <div className="text-2xl font-gw2-header text-slate-100">{progressList.length}</div>
             <div className="text-xs text-slate-400 uppercase font-semibold">In Progress</div>
           </div>
         </div>
@@ -3104,7 +3121,7 @@ const Dashboard = ({
             {getPlaystyleIcon(playstyle)}
           </div>
           <div className="flex-1">
-            <div className="text-2xl font-bold text-slate-100">{playstyle}</div>
+            <div className="text-2xl font-gw2-header text-slate-100">{playstyle}</div>
             <div className="text-xs text-slate-400 uppercase font-semibold">{getPlaystyleDesc(playstyle)}</div>
           </div>
           <div className="text-slate-500">
@@ -3116,7 +3133,7 @@ const Dashboard = ({
       <div className="space-y-6">
         {/* Flavor Selector */}
         <section>
-          <h3 className="text-xl font-bold text-slate-200 mb-4 flex items-center gap-2">
+          <h3 className="text-xl font-gw2-subheader text-slate-200 mb-4 flex items-center gap-2">
             <Compass className="text-amber-500" /> What's Your Goal?
           </h3>
           <div className="grid grid-cols-2 md:grid-cols-3 lg:grid-cols-5 xl:grid-cols-5 gap-3 mb-6">
@@ -3130,7 +3147,7 @@ const Dashboard = ({
             >
               <div className="flex flex-col items-center gap-2">
                 <Target size={24} />
-                <span className="text-sm font-semibold">Quick Wins</span>
+                <span className="text-sm font-gw2-subheader">Quick Wins</span>
                 <span className="text-xs text-slate-400 text-center">Nearly complete achievements</span>
               </div>
             </button>
@@ -3144,7 +3161,7 @@ const Dashboard = ({
             >
               <div className="flex flex-col items-center gap-2">
                 <Gem size={24} />
-                <span className="text-sm font-semibold">Legendary Gear</span>
+                <span className="text-sm font-gw2-subheader">Legendary Gear</span>
                 <span className="text-xs text-slate-400 text-center">Legendary collections</span>
               </div>
             </button>
@@ -3158,7 +3175,7 @@ const Dashboard = ({
             >
               <div className="flex flex-col items-center gap-2">
                 <Shirt size={24} />
-                <span className="text-sm font-semibold">Fashion</span>
+                <span className="text-sm font-gw2-subheader">Fashion</span>
                 <span className="text-xs text-slate-400 text-center">Skins & wardrobe</span>
               </div>
             </button>
@@ -3172,7 +3189,7 @@ const Dashboard = ({
             >
               <div className="flex flex-col items-center gap-2">
                 <Calendar size={24} />
-                <span className="text-sm font-semibold">Seasonal</span>
+                <span className="text-sm font-gw2-subheader">Seasonal</span>
                 <span className="text-xs text-slate-400 text-center">Festival collections</span>
               </div>
             </button>
@@ -3186,7 +3203,7 @@ const Dashboard = ({
             >
               <div className="flex flex-col items-center gap-2">
                 <Star size={24} className="fill-current" />
-                <span className="text-sm font-semibold">Mastery</span>
+                <span className="text-sm font-gw2-subheader">Mastery</span>
                 <span className="text-xs text-slate-400 text-center">Mastery Point rewards</span>
               </div>
             </button>
@@ -3200,7 +3217,7 @@ const Dashboard = ({
             >
               <div className="flex flex-col items-center gap-2">
                 <Crown size={24} />
-                <span className="text-sm font-semibold">Meta</span>
+                <span className="text-sm font-gw2-subheader">Meta</span>
                 <span className="text-xs text-slate-400 text-center">High-value rewards</span>
               </div>
             </button>
@@ -3214,7 +3231,7 @@ const Dashboard = ({
             >
               <div className="flex flex-col items-center gap-2">
                 <Scroll size={24} />
-                <span className="text-sm font-semibold">Story</span>
+                <span className="text-sm font-gw2-subheader">Story</span>
                 <span className="text-xs text-slate-400 text-center">Story & Living World</span>
               </div>
             </button>
@@ -3228,7 +3245,7 @@ const Dashboard = ({
             >
               <div className="flex flex-col items-center gap-2">
                 <Trophy size={24} />
-                <span className="text-sm font-semibold">Endgame</span>
+                <span className="text-sm font-gw2-subheader">Endgame</span>
                 <span className="text-xs text-slate-400 text-center">Raids, Strikes & Fractals</span>
               </div>
             </button>
@@ -3242,7 +3259,7 @@ const Dashboard = ({
             >
               <div className="flex flex-col items-center gap-2">
                 <Sword size={24} />
-                <span className="text-sm font-semibold">Competitive</span>
+                <span className="text-sm font-gw2-subheader">Competitive</span>
                 <span className="text-xs text-slate-400 text-center">PvP & WvW</span>
               </div>
             </button>
@@ -3256,7 +3273,7 @@ const Dashboard = ({
             >
               <div className="flex flex-col items-center gap-2">
                 <Zap size={24} />
-                <span className="text-sm font-semibold">Wild Card</span>
+                <span className="text-sm font-gw2-subheader">Wild Card</span>
                 <span className="text-xs text-slate-400 text-center">Smart recommendations</span>
               </div>
             </button>
@@ -3264,7 +3281,7 @@ const Dashboard = ({
         </section>
 
         <section>
-          <h3 className="text-xl font-bold text-slate-200 mb-4 flex items-center gap-2">
+          <h3 className="text-xl font-gw2-subheader text-slate-200 mb-4 flex items-center gap-2">
             <Zap className="text-amber-500" /> Recommended Next Steps
           </h3>
           
@@ -4188,7 +4205,7 @@ export default function GW2Pathfinder() {
                  <img src={currentCategoryDetails.icon} alt="" className="w-12 h-12 opacity-80" />
             </div>
             <div>
-                 <h2 className="text-2xl font-bold text-slate-100">{currentCategoryDetails.name}</h2>
+                 <h2 className="text-2xl font-gw2-header text-slate-100">{currentCategoryDetails.name}</h2>
                  <p className="text-slate-400">{currentCategoryDetails.description}</p>
             </div>
         </div>
@@ -4288,7 +4305,7 @@ export default function GW2Pathfinder() {
             onClick={(e) => e.stopPropagation()}
           >
             <div className="sticky top-0 bg-slate-800 border-b border-slate-700 p-4 flex items-center justify-between z-10">
-              <h3 className="text-xl font-bold text-slate-100 flex items-center gap-2">
+              <h3 className="text-xl font-gw2-header text-slate-100 flex items-center gap-2">
                 <Compass className="text-amber-500" size={24} />
                 Playstyle Breakdown
               </h3>
